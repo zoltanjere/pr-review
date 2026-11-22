@@ -9,11 +9,13 @@ test('the verdict has three levels decided by the highest confirmed priority', (
   const four = [1, 2, 3, 4].map(() => f('Confirmed', 'Should fix'));
   assert.deepEqual(
     [verdictFor([...four, f('Question'), f('Confirmed', 'Minor'), f('Rejected')]).line, verdictFor(four).event],
-    ['**Verdict:** ⚠️ Changes recommended. 4 should-fix, 1 question, 1 minor.', 'request-changes'],
+    ['**Verdict:** ⚠️ Changes recommended. 4 should-fix, 1 question.', 'request-changes'],
   );
   assert.deepEqual([verdictFor([f('Question'), f('Question')]).line, verdictFor([f('Question')]).event],
     ['**Verdict:** ✅ Ship. 2 questions.', 'approve']);
   assert.equal(verdictFor([]).line, '**Verdict:** ✅ Ship. No issues found.');
+  // Minors are counted in the <details> summary only, never in the verdict line.
+  assert.equal(verdictFor([f('Confirmed', 'Minor'), f('Confirmed', 'Minor')]).line, '**Verdict:** ✅ Ship. Only minor items.');
 });
 
 test('the verdict level is read back from a digest, or null without a verdict line', () => {
@@ -33,7 +35,9 @@ test('the chosen review type rewrites a contradicting verdict line and keeps the
   assert.equal(alignVerdict(ship, 'comment').digest, '**Verdict:** 💬 Not approved yet. 1 question.\n\nbody');
   assert.equal(alignVerdict(ship, 'approve').changed, false);
   const block = '**Verdict:** 🔴 Fix before merge. 1 must-fix.\n\nbody';
-  assert.equal(alignVerdict(block, 'approve').digest, '**Verdict:** ✅ Ship. 1 must-fix.\n\nbody');
+  assert.equal(alignVerdict(block, 'approve').digest, '**Verdict:** ✅ Ship. 1 must-fix, none blocking.\n\nbody');
+  assert.equal(alignVerdict('**Verdict:** ⚠️ Changes recommended. 1 should-fix, 1 question.\n\nbody', 'approve').digest,
+    '**Verdict:** ✅ Ship. 1 should-fix, 1 question, none blocking.\n\nbody');
   assert.equal(alignVerdict(block, 'request-changes').changed, false);
   assert.equal(alignVerdict(block, 'comment').changed, false);
 });
@@ -48,4 +52,11 @@ test('digestBody keeps the comment format and cuts everything else', async () =>
     body: details, removed: ['Here is the comment:', 'Let me know if you want changes.'],
   });
   assert.equal(digestBody('  indented chatter before anything\n\n### Must fix\n1. 🔴 **X**').body, '### Must fix\n1. 🔴 **X**');
+});
+
+test('digestBody drops a group that only says None', async () => {
+  const { digestBody } = await import('../src/adapters.mjs');
+  const text = '### Must fix\nNone.\n\n### Should fix\n1. 🟡 **Real problem**\n   `a.py` · `f`\n\n### Questions\n- n/a\n\n<details><summary>1 minor item</summary>\n\n- `b.py:3`: unused.\n</details>';
+  assert.equal(digestBody(text).body, '### Should fix\n1. 🟡 **Real problem**\n   `a.py` · `f`\n\n<details><summary>1 minor item</summary>\n\n- `b.py:3`: unused.\n</details>');
+  assert.equal(digestBody('### Must fix\nNone.').body, '');
 });

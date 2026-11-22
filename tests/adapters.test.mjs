@@ -406,6 +406,24 @@ test('a check session with the wrong number of verdicts is retried once with a n
   assert.match(prompts[1], /wrong number of verdicts/);
 });
 
+test('the check prompt makes verify trace a claimed example and skip what the PR already states', async (t) => {
+  const prompts = [];
+  const copilot = (args) => {
+    if (isCheck(args)) prompts.push(promptOf(args));
+    return verifyStep(args);
+  };
+  const { adapters } = await prepared(t, { copilot });
+  await adapters.verify({ 'code-review': 'review' });
+  assert.match(prompts[0], /walk that exact input through every function/);
+  assert.match(prompts[0], /If a step contradicts the example/);
+  // Severity is not lowered by likelihood: the person decides whether a Should fix blocks.
+  assert.doesNotMatch(prompts[0], /Rate by likelihood/);
+  assert.match(prompts[0], /already stated in the PR/);
+  assert.match(prompts[0], /proof of that same check \(same tool or command\)/);
+  assert.match(prompts[0], /Quote the PR's words/);
+  assert.match(prompts[0], /whether the PR body already states what a finding describes/);
+});
+
 test('verify with no findings records that and checks nothing', async (t) => {
   const copilot = (args) => verifyStep(args, MODEL, []);
   const { adapters } = await prepared(t, { copilot });

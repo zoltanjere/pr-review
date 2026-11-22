@@ -2,6 +2,14 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.4.0 (2026-11-23)
+
+- **Empty groups:** a digest group that only says `None.` (for example `### Must fix` with nothing under it) is removed from the comment.
+- **Traced examples:** verify walks a finding's claimed input through each function before confirming it, and corrects or rejects examples that don't hold.
+- **Already stated in the PR:** a gap, limitation or deferral the PR body already states is rejected, and so is a question asking for proof of a check the PR says it ran (the same check only). Verify quotes the PR when it does this.
+- **Verdict line:** minor items are counted only in the `<details>` summary, so the two numbers can't disagree; with only minor items it says "Only minor items." Approving over open items posts "✅ Ship. 1 should-fix, 1 question, none blocking." without an edit.
+- **More minor findings checked:** tier B holds up to 12 findings instead of 8.
+
 ## 0.3.0 (2026-11-22)
 
 - **Digest cleanup:** notes the model writes about itself (saving files, the sandbox, posting) are removed from the comment, with a warning saying what was cut.

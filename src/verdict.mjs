@@ -17,9 +17,11 @@ function counts(findings) {
     [confirmed('Must fix'), 'must-fix'],
     [confirmed('Should fix'), 'should-fix'],
     [questions, questions === 1 ? 'question' : 'questions'],
-    [confirmed('Minor'), 'minor'],
   ].filter(([count]) => count).map(([count, name]) => `${count} ${name}`);
-  return parts.length ? `${parts.join(', ')}.` : 'No issues found.';
+  // Minor items are counted once, in the <details> summary the digest writes,
+  // so the two numbers can't disagree when the digest merges related lines.
+  if (parts.length) return `${parts.join(', ')}.`;
+  return confirmed('Minor') ? 'Only minor items.' : 'No issues found.';
 }
 
 const lineFor = (level, rest) => `**Verdict:** ${LEVELS[level].icon} ${LEVELS[level].label}. ${rest}`;
@@ -52,7 +54,9 @@ export function alignVerdict(digest, event) {
       : null;
   if (!target) return { digest, changed: false };
   const old = VERDICT_LINE.exec(digest)?.[0];
-  const rest = old ? old.replace(/^\s*\*\*Verdict:\*\*\s*\S+\s+[^.]*\.\s*/, '').trim() : '';
+  let rest = old ? old.replace(/^\s*\*\*Verdict:\*\*\s*\S+\s+[^.]*\.\s*/, '').trim() : '';
+  // Approving over open should-fix items or questions: say they don't block.
+  if (target === 'ship' && /\b(?:must-fix|should-fix|questions?)\b/.test(rest)) rest = rest.replace(/\.$/, ', none blocking.');
   const line = lineFor(target, rest || '').trimEnd();
   const updated = old ? digest.replace(VERDICT_LINE, `${line}\n`) : `${line}\n\n${digest}`;
   return { digest: updated, changed: true, line };

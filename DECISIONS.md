@@ -163,9 +163,9 @@ Each entry has three parts:
   - **Minor bar:** a Minor is something a careful senior reviewer would still comment on and the author would act on: a misleading message or name, duplication or dead code the PR adds, a missing test for new logic, or unmentioned scope. True findings below that bar are Rejected with "below the Minor bar". That covers cosmetics, display-only polish, inputs only tests set, failure modes that predate the PR or follow a repo-wide pattern, and feature or hardening requests beyond the PR.
 - **Why:** An earlier, looser definition rejected true but small findings, which lost useful minor items. With no bar at all, a small PR got 8 minor items, about half of them not worth a comment. The bar names concrete categories, so "small" alone is never a reason to reject.
 
-### 4.2a A deliberate bypass is a Must fix
-- **Decision:** In the check rubric, a way for someone to deliberately get past a check, filter, gate or validation the PR adds counts as a security hole, so it's a Must fix. An accidental, rare fail-open stays Should fix.
-- **Why:** A finding that let added lines slip past a new content scanner was rated Should fix, although the scanner's whole purpose is to catch such content.
+### 4.2a A deliberate bypass is a Must fix, when the check is a protection
+- **Decision:** In the check rubric, a way for someone to deliberately get past a check the PR adds counts as a security hole, so it's a Must fix, when that check is a protection: access control, validation of untrusted input, a filter for private or harmful data, or a gate that decides a merge, release or deploy. An accidental, rare fail-open stays Should fix. A new way around a best-effort heuristic (a text scorer, a lint, a detector, an evaluation metric) is Should fix at most, and Minor when the code or its docs already say it can be fooled the same way.
+- **Why:** A finding that let added lines slip past a new content scanner was rated Should fix, although the scanner's whole purpose is to catch such content. The rule then over-fired the other way: on a heuristic report scorer whose docstring already said invented reproductions pass, one more way to fool it was rated Must fix and blocked a PR whose earlier findings were all fixed.
 
 ### 4.3 Own evidence only
 - **Decision:** Verify must base every decision on code or files it opened, and cite `file:line`. Another review's claim is not evidence.
@@ -190,6 +190,10 @@ Each entry has three parts:
 ### 5.1a No process talk in the comment
 - **Decision:** The digest never mentions reviewers, tools, a reviewer's severity rating, or what was or wasn't checked.
 - **Why:** A digest once said "The security reviewer rated this Low" and "(not checked in code)". The author reads findings, not how they were found. The full record keeps that detail.
+
+### 5.1c The reply is the comment; anything else is cut in code
+- **Decision:** The digest prompt says the reply is the comment body and nothing else. In code, `digestBody` keeps only the skill's format (group headings, numbered findings with their indented lines, fenced code, the `<details>` block, the verdict or `Nothing to raise.` line) and removes every other paragraph, with a warning naming what was cut.
+- **Why:** A digest once opened with "I couldn't save a file: the sandbox blocks bash writes…" and ended with "Nothing was posted. No subagents were spawned." Posted as is, those lines would have reached the PR. A prompt rule alone doesn't reliably stop this, and the format is strict enough to check in code.
 
 ### 5.1b No summary of the PR
 - **Decision:** The digest goes straight from the verdict to the findings. It never restates what the PR does.

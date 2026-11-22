@@ -2,6 +2,11 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.3.0 (2026-11-22)
+
+- **Digest cleanup:** notes the model writes about itself (saving files, the sandbox, posting) are removed from the comment, with a warning saying what was cut.
+- **Bypass rule:** a deliberate way past a new check is a Must fix only when the check is a protection (access, untrusted input, private data, merge or deploy gates). A new way around a best-effort heuristic is Should fix at most, and Minor when its limits are already documented.
+
 ## 0.2.0 (2026-11-22)
 
 - **Live timer:** running steps show a timer that ticks every second.

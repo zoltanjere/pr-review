@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { withProgress } from './progress.mjs';
-import { formatTokens, formatUsage, toReporter } from './ui.mjs';
+import { formatTokens, formatUsage, short, toReporter } from './ui.mjs';
 import { withVerdict } from './verdict.mjs';
 import { linkify } from './links.mjs';
 
@@ -37,6 +37,33 @@ export const DIGEST_WORD_LIMIT = 250;
 
 // The verdict line is added in code (src/verdict.mjs), so only the budget is
 // checked; it counts the verdict line too.
+// Keeps only what fits the review-digest format: group headings, numbered
+// findings with their indented lines, the <details> block, and the verdict
+// or "Nothing to raise." line. A model sometimes adds notes about itself
+// ("I couldn't save a file…", "Nothing was posted."); those paragraphs are
+// returned as `removed` so the run can say what was cut.
+const DIGEST_START = /^(?:#{2,4}\s|\d+[.)]\s|<\/?details\b|[-*]\s|\*\*Verdict:\*\*|`?Nothing to raise\.?`?\s*$)/i;
+export function digestBody(text) {
+  const kept = [];
+  const removed = [];
+  let inDetails = false;
+  let inFence = false;
+  for (const paragraph of String(text ?? '').replace(/\r\n/g, '\n').split(/\n[ \t]*\n/)) {
+    if (!paragraph.trim()) continue;
+    const first = paragraph.split('\n').find((line) => line.trim());
+    const belongs = inDetails || inFence || DIGEST_START.test(first)
+      || (kept.length > 0 && (/^\s/.test(first) || first.startsWith('```')));
+    (belongs ? kept : removed).push(paragraph.replace(/\s+$/, ''));
+    if (!belongs) continue;
+    for (const line of paragraph.split('\n')) {
+      if (line.trim().startsWith('```')) inFence = !inFence;
+      else if (/<details\b/i.test(line)) inDetails = !/<\/details>/i.test(line.slice(line.search(/<details\b/i)));
+      else if (/<\/details>/i.test(line)) inDetails = false;
+    }
+  }
+  return { body: kept.join('\n\n'), removed };
+}
+
 export function checkDigest(text) {
   const visible = text.split(/<details\b/i)[0];
   const words = visible.split(/\s+/).filter(Boolean).length;
@@ -282,8 +309,8 @@ Decide for each:
 - Rejected: the claim is false (the code, a guard, a caller or a test rules it out); or it is pure style or taste with no concrete effect; or it is true but below the Minor bar below. A true finding that clears the Minor bar is not Rejected. Being outside the specification is not a reason to reject a concrete problem.
 
 If Confirmed, give it one priority. This is the only place priority is decided:
-- Must fix: merging as-is causes wrong behaviour, a crash, a security hole, data loss or exposure of private data, breaks a caller, or misses a requirement the specification makes mandatory. A way for someone to deliberately get past a check, filter, gate or validation the PR adds (a fail-open an author can trigger on purpose) is a security hole.
-- Should fix: a real risk or gap with a concrete case that does not have to block the merge, such as risky logic without a test, a partly met requirement, an unclear failure, or a fail-open that only happens by accident in rare cases.
+- Must fix: merging as-is causes wrong behaviour, a crash, a security hole, data loss or exposure of private data, breaks a caller, or misses a requirement the specification makes mandatory. A way for someone to deliberately get past a check the PR adds (a fail-open they can trigger on purpose) is a security hole when that check is a protection: access control, validation of untrusted input, a filter for private or harmful data, or a gate that decides a merge, release or deploy.
+- Should fix: a real risk or gap with a concrete case that does not have to block the merge, such as risky logic without a test, a partly met requirement, an unclear failure, or a fail-open that only happens by accident in rare cases. A new way around a best-effort heuristic (a text scorer, a lint, a detector, an evaluation metric) is Should fix at most, and Minor when the code or its docs already state that it can be fooled the same way.
 - Minor: low impact, but a careful senior reviewer would still leave the comment and the author would likely act on it: a misleading message or name, a small duplication or dead code this PR adds, a missing test for logic this PR adds, or scope the PR does not mention.
   Below the bar, so Rejected with the reason "below the Minor bar": formatting or cosmetics; display-only polish nobody is misled by; inputs only tests or maintainers set; a failure mode that existed before this PR or follows a pattern the repository uses everywhere; and requests for features or hardening beyond the PR's purpose.
 Question and Rejected get priority "-".
@@ -712,12 +739,18 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
       const verifiedPath = join(session.workspace, 'verified-review.md');
       await writeFile(verifiedPath, verified);
       const prompt = `/review-digest
-Read the verified review in ${verifiedPath} and write the PR comment body exactly as the review-digest skill specifies: its template, placement and word budget. Do not write a verdict line; the pipeline adds it. Do not post anywhere.`;
+Read the verified review in ${verifiedPath} and write the PR comment body exactly as the review-digest skill specifies: its template, placement and word budget. Do not write a verdict line; the pipeline adds it. Your reply is the comment: reply with the comment body only. Do not save it to a file or post it anywhere, and add no notes about files, tools, the sandbox, posting or subagents; text outside the skill's format is removed.`;
+      // Cuts what isn't part of the comment, and says so.
+      const clean = (response) => {
+        const { body, removed } = digestBody(response);
+        if (removed.length) reporter.warn(`removed from the digest, not part of the comment: ${short(removed.join(' / ').replace(/\s+/g, ' '), 160)}`);
+        return body;
+      };
       // file:line references become GitHub links; the checkout is still there to
       // list the repository's files, so short paths can be resolved.
       const files = (await execute('git', ['-C', session.checkout, 'ls-files', '-z'])).split('\0').filter(Boolean);
       const links = (text) => linkify(text, { ...session.pr, head: session.head, diffText: session.diffText, files });
-      const first = withVerdict(await agent(prompt, 'review-digest'), findings);
+      const first = withVerdict(clean(await agent(prompt, 'review-digest')), findings);
       const problem = checkDigest(first);
       if (!problem) return links(first);
       reporter.note(`Digest ${problem}; retrying once`);
@@ -725,7 +758,7 @@ Read the verified review in ${verifiedPath} and write the PR comment body exactl
       await writeFile(draftPath, first);
       const retry = withVerdict(await agent(`${prompt}
 
-A previous draft is in ${draftPath}, but it ${problem}. Rewrite it to fit the skill: keep every Must fix, and stay within ${DIGEST_WORD_LIMIT} words before <details>, counting the verdict line. Fold or drop lower-impact items.`, 'review-digest'), findings);
+A previous draft is in ${draftPath}, but it ${problem}. Rewrite it to fit the skill: keep every Must fix, and stay within ${DIGEST_WORD_LIMIT} words before <details>, counting the verdict line. Fold or drop lower-impact items.`, 'review-digest').then(clean), findings);
       const remaining = checkDigest(retry);
       if (remaining) reporter.warn(`digest still ${remaining}`);
       return links(retry);

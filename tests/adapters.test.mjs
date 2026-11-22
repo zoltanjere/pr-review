@@ -281,7 +281,7 @@ async function digestRun(t, drafts) {
 }
 
 test('an over-budget digest is retried once and the shorter version returned', async (t) => {
-  const long = `**Verdict:** ✅ Ship.\n\n${'word '.repeat(400)}`;
+  const long = `**Verdict:** ✅ Ship.\n\n### Should fix\n1. 🟡 **Long**\n   ${'word '.repeat(400)}`;
   const short = '**Verdict:** ✅ Ship. No issues found.';
   const { result, prompts } = await digestRun(t, [long, short]);
   assert.equal(result, '**Verdict:** ✅ Ship. No issues found.');
@@ -309,11 +309,26 @@ test('the verdict line comes from the findings, replacing any the model wrote', 
 });
 
 test('a digest still over budget after the retry is saved with a warning', async (t) => {
-  const long = 'word '.repeat(400);
+  const long = `### Should fix\n1. 🟡 **Long**\n   ${'word '.repeat(400)}`;
   const { result, prompts, messages } = await digestRun(t, [long, long]);
-  assert.match(result, /^\*\*Verdict:\*\* ✅ Ship\. No issues found\.\n\nword/);
+  assert.match(result, /^\*\*Verdict:\*\* ✅ Ship\. No issues found\.\n\n### Should fix\n1\. 🟡 \*\*Long\*\*\n   word/);
   assert.equal(prompts.length, 2);
   assert(messages.some((text) => /warning.*words before <details>/i.test(text)));
+});
+
+test('notes the model writes about itself are removed from the digest, with a warning', async (t) => {
+  const draft = [
+    "I couldn't save a file: the sandbox blocks writes. The body is below:",
+    '### Must fix\n1. 🔴 **Retry resends a stored chunk**\n   `upload.ts` · `sendChunk`\n   A timeout resends it. Fix: send an offset.',
+    '<details><summary>1 minor item</summary>\n\n- `retry.ts:4`: unused export.\n</details>',
+    'Nothing was posted. No subagents were spawned.',
+  ].join('\n\n');
+  const { result, prompts, messages } = await digestRun(t, [draft]);
+  assert.doesNotMatch(result, /sandbox|Nothing was posted|subagents/);
+  assert.match(result, /### Must fix\n1\. 🔴 \*\*Retry resends a stored chunk\*\*\n   `upload\.ts`/);
+  assert.match(result, /<details><summary>1 minor item<\/summary>\n\n- `retry\.ts:4`: unused export\.\n<\/details>$/);
+  assert(messages.some((text) => /removed from the digest.*couldn't save a file/i.test(text)), messages.join('\n'));
+  assert.match(prompts[0], /reply with the comment body only/i);
 });
 
 test('an unreachable or unconfigured work item is recorded without failing preparation', async (t) => {

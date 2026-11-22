@@ -37,3 +37,15 @@ test('the chosen review type rewrites a contradicting verdict line and keeps the
   assert.equal(alignVerdict(block, 'request-changes').changed, false);
   assert.equal(alignVerdict(block, 'comment').changed, false);
 });
+
+test('digestBody keeps the comment format and cuts everything else', async () => {
+  const { digestBody } = await import('../src/adapters.mjs');
+  assert.deepEqual(digestBody('Nothing to raise.'), { body: 'Nothing to raise.', removed: [] });
+  const fenced = '### Should fix\n1. 🟡 **Bad parse**\n   `a.py` · `parse`\n\n```\nx = 1\n\nprint(x)\n```\n\n### Questions\n2. ❓ Which limit applies?';
+  assert.deepEqual(digestBody(fenced), { body: fenced, removed: [] });
+  const details = '<details><summary>2 minor items</summary>\n\n- one\n\n- two\n</details>';
+  assert.deepEqual(digestBody(`Here is the comment:\n\n${details}\n\nLet me know if you want changes.`), {
+    body: details, removed: ['Here is the comment:', 'Let me know if you want changes.'],
+  });
+  assert.equal(digestBody('  indented chatter before anything\n\n### Must fix\n1. 🔴 **X**').body, '### Must fix\n1. 🔴 **X**');
+});

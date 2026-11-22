@@ -1,0 +1,5 @@
+{
+  "model": "claude-sonnet-5.5",
+  "azureDevOpsOrg": "https://dev.azure.com/your-organization",
+  "defaultRepository": "your-org/your-repo"
+}

@@ -136,11 +136,11 @@ const statePr = (number, extra = {}) => ({
 test('each PR gets one state, first match wins', async () => {
   const { prState } = await import('../src/select.mjs');
   const older = 'b'.repeat(40);
-  const commits = [{ oid: older, committedDate: hoursAgo(30) }, { oid: 'c'.repeat(40), committedDate: hoursAgo(5) }, { oid: HEAD, committedDate: hoursAgo(2) }];
+  const newer = { count: 2, last: hoursAgo(2) };
   const asked = statePr(2, { createdAt: hoursAgo(1), reviewRequests: [{ login: ME }] });
   const cases = [
-    [prState(statePr(1, { commits }), ME, { mine: { state: 'CHANGES_REQUESTED' }, covered: older.slice(0, 7), now: NOW }), 'fixes', '2 new commits · 2h'],
-    [prState(statePr(1, { commits }), ME, { mine: { state: 'APPROVED' }, covered: older, now: NOW }), 'updated', 'approved · 2 new commits'],
+    [prState(statePr(1), ME, { mine: { state: 'CHANGES_REQUESTED' }, covered: older.slice(0, 7), newer, now: NOW }), 'fixes', '2 new commits · 2h'],
+    [prState(statePr(1), ME, { mine: { state: 'APPROVED' }, covered: older, newer, now: NOW }), 'updated', 'approved · 2 new commits'],
     [prState(asked, ME, { now: NOW }), 'requested', 'requested · 3d'],
     [prState(statePr(3, { createdAt: hoursAgo(0.5) }), ME, { now: NOW }), 'new', 'opened 30m ago'],
     [prState(statePr(4, { updatedAt: hoursAgo(3) }), ME, { now: NOW }), 'updated', 'updated 3h ago'],
@@ -204,4 +204,17 @@ test('s skips a PR until its head changes, a shows skipped PRs again', async (t)
   open = [statePr(42, { headRefOid: 'd'.repeat(40) }), statePr(43)];
   assert.equal((await run('return')).url, 'https://github.com/acme/widget/pull/42', 'a new commit ends the skip');
   assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')), { skipped: { 'acme/widget#42': HEAD } }, 'pruned only when saved');
+});
+
+test('new commits are counted only for PRs that changed since your review', async () => {
+  const calls = [];
+  const changed = statePr(1, { headRefOid: 'e'.repeat(40), latestReviews: [review('CHANGES_REQUESTED', 'Reviewed at `a7e50c8` with AI assistance.')] });
+  const { prs } = await candidatePrs([changed, statePr(2)], ME, {
+    now: NOW,
+    commitsSince: async (number, base, head) => { calls.push([number, base, head.slice(0, 1)]); return { count: 3, last: hoursAgo(2) }; },
+  });
+  assert.deepEqual(calls, [[1, 'a7e50c8', 'e']]);
+  assert.equal(prs[0].state.label, '3 new commits · 2h');
+  const failing = await candidatePrs([changed], ME, { now: NOW, commitsSince: async () => { throw new Error('rate limited'); } });
+  assert.equal(failing.prs[0].state.label, 'new commits · 3d', 'a failed count still lists the PR');
 });

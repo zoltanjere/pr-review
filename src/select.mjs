@@ -42,8 +42,9 @@ export function age(ms) {
 }
 
 // The state of one listed PR, first match wins. `mine` is your latest review
-// (null when none or dismissed); `covered` is the commit it covered.
-export function prState(pr, viewer, { mine = null, covered = null, now = Date.now() } = {}) {
+// (null when none or dismissed); `covered` is the commit it covered; `newer`
+// is { count, last } for the commits since then, when known.
+export function prState(pr, viewer, { mine = null, covered = null, newer = null, now = Date.now() } = {}) {
   const at = (key) => ({ key, ...STATES[key] });
   // Milliseconds since a timestamp, or null when it's missing: unknown is never "new".
   const since = (iso) => { const time = Date.parse(iso ?? ''); return Number.isNaN(time) ? null : now - time; };
@@ -51,13 +52,11 @@ export function prState(pr, viewer, { mine = null, covered = null, now = Date.no
   const within = (iso, ms) => since(iso) !== null && since(iso) < ms;
   const head = String(pr.headRefOid ?? '');
   if (mine && covered && !head.startsWith(covered)) {
-    const commits = pr.commits ?? [];
-    const index = commits.findIndex((commit) => String(commit?.oid ?? '').startsWith(covered));
-    const count = index >= 0 ? commits.length - index - 1 : 0;
+    const count = newer?.count ?? 0;
     const what = count ? `${count} new commit${count === 1 ? '' : 's'}` : 'new commits';
     // You approved: lower priority than fixes pushed after your change request.
     if (mine.state === 'APPROVED') return { ...at('updated'), label: `approved · ${what}` };
-    return { ...at('fixes'), label: [what, ago(commits.at(-1)?.committedDate ?? pr.updatedAt)].filter(Boolean).join(' · ') };
+    return { ...at('fixes'), label: [what, ago(newer?.last ?? pr.updatedAt)].filter(Boolean).join(' · ') };
   }
   if (isRequested(pr, viewer)) return { ...at('requested'), label: ['requested', ago(pr.updatedAt)].filter(Boolean).join(' · ') };
   if (within(pr.createdAt, DAY)) return { ...at('new'), label: `opened ${ago(pr.createdAt)} ago` };
@@ -71,7 +70,9 @@ export function prState(pr, viewer, { mine = null, covered = null, now = Date.no
 // asked again. Drafts, your own PRs and bot PRs are hidden. When the reviewed
 // commit can't be found, the PR is shown: listing too much is safer than
 // hiding one. Sorted by state priority, then most recent activity.
-export async function candidatePrs(prs, viewer, { commitOf = async () => null, now = Date.now() } = {}) {
+// `commitsSince(number, covered, head)` counts the commits after your review;
+// it is called only for PRs you reviewed that have changed since.
+export async function candidatePrs(prs, viewer, { commitOf = async () => null, commitsSince = async () => null, now = Date.now() } = {}) {
   const hidden = { reviewed: 0, draft: 0, yours: 0, bot: 0 };
   const kept = [];
   for (const pr of prs) {
@@ -82,7 +83,9 @@ export async function candidatePrs(prs, viewer, { commitOf = async () => null, n
     const mine = latest && latest.state !== 'DISMISSED' ? latest : null;
     const covered = mine ? reviewedHead(mine) ?? (mine.commit?.oid || await commitOf(pr.number)) : null;
     if (covered && String(pr.headRefOid ?? '').startsWith(covered) && !isRequested(pr, viewer)) { hidden.reviewed++; continue; }
-    kept.push({ ...pr, state: prState(pr, viewer, { mine, covered, now }) });
+    const changed = mine && covered && !String(pr.headRefOid ?? '').startsWith(covered);
+    const newer = changed ? await commitsSince(pr.number, covered, pr.headRefOid).catch(() => null) : null;
+    kept.push({ ...pr, state: prState(pr, viewer, { mine, covered, newer, now }) });
   }
   kept.sort((a, b) => a.state.rank - b.state.rank || String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
   return { prs: kept, hidden, open: prs.length };
@@ -230,6 +233,10 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
         commitOf: (number) => {
           ui.status(`checking your review of #${number}`);
           return adapters.reviewCommit(repo, number, viewer);
+        },
+        commitsSince: (number, base, head) => {
+          ui.status(`counting new commits on #${number}`);
+          return adapters.commitsSince?.(repo, base, head) ?? null;
         },
       });
       return `${list.prs.length} to review`;

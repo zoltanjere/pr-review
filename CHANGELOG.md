@@ -7,6 +7,7 @@ This project follows [semantic versioning](https://semver.org/). A pipeline or t
 - **PR picker states:** each PR shows an icon, a colour and a label, grouped most urgent first: ⟳ Fixes pushed ("3 new commits · 2h"), ★ Asked for you, ● New (opened in 24 h), ↑ Updated (24 h, or approved with new commits), then Waiting, with ◌ for 14+ days idle. Colour is never the only signal.
 - **Skip:** `s` hides a PR until its author pushes a new commit, and `a` shows skipped PRs. Skips are kept locally in the git-ignored `state/picker.json`.
 - **Re-requested reviews** are listed even when you reviewed the current head.
+- **Query limit:** new commits are counted with one compare call per PR that changed since your review. Asking `gh pr list` for all PRs' commits exceeded GitHub's GraphQL node limit.
 
 ## 0.4.1 (2026-11-23)
 

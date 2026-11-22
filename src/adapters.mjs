@@ -726,7 +726,7 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
     // Open PRs of owner/repo with what the picker needs, in one read-only call.
     async listOpenPrs(repo) {
       return JSON.parse(await execute('gh', ['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '200',
-        '--json', 'number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,commits,createdAt,updatedAt']));
+        '--json', 'number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,createdAt,updatedAt']));
     },
     // The commit the viewer's latest review covered, for reviews without our
     // footer. gh pr list leaves review commits empty, the REST API does not.
@@ -734,6 +734,14 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
       const reviews = JSON.parse(await execute('gh', ['api', '--paginate', '--slurp', `repos/${repo}/pulls/${number}/reviews`]));
       const mine = reviews.flat().filter((review) => review?.user?.login === viewer && review.commit_id);
       return mine.at(-1)?.commit_id ?? null;
+    },
+    // Commits on a PR since the one your review covered, for the picker's
+    // "3 new commits · 2h". Only called for PRs that changed since your review:
+    // asking gh pr list for every PR's commits exceeds GitHub's query limit.
+    async commitsSince(repo, base, head) {
+      const data = JSON.parse(await execute('gh', ['api', `repos/${repo}/compare/${base}...${head}`,
+        '--jq', '{count: .ahead_by, last: (.commits | last | .commit.committer.date)}']));
+      return Number.isInteger(data?.count) ? data : null;
     },
     // The local clone check, for the picker to fail before listing.
     async findClone(owner, repo) {

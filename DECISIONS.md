@@ -317,7 +317,7 @@ Each entry has three parts:
   - The reviews may hold sensitive content.
 
 ### 7.3 PR picker: what is listed and why
-- **Decision:** Without a URL, the tool lists the open PRs of `defaultRepository` from one `gh pr list --json number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,commits,createdAt,updatedAt` call, and you pick one with the arrow keys (`src/select.mjs`).
+- **Decision:** Without a URL, the tool lists the open PRs of `defaultRepository` from one `gh pr list --json number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,createdAt,updatedAt` call, and you pick one with the arrow keys (`src/select.mjs`).
   - **Listed:**
     - PRs with no review from you;
     - PRs whose latest review by you was dismissed;
@@ -327,7 +327,7 @@ Each entry has three parts:
     Any review type counts.
   - **Hidden:** drafts, your own PRs and bot PRs.
   - **States and order:** each PR gets one state, first match wins, shown with an icon, a colour and a label, and grouped under a heading in this order:
-    1. **⟳ Fixes pushed:** your latest review was Request changes or Comment, and there are commits after it ("3 new commits · 2h").
+    1. **⟳ Fixes pushed:** your latest review was Request changes or Comment, and there are commits after it ("3 new commits · 2h"). The count comes from one `gh api repos/<repo>/compare/<reviewed>...<head>` call per changed PR, not from `gh pr list --json commits`: asking for every PR's commits exceeded GitHub's 500,000-node query limit on a real repository. If the count fails, the PR is still listed, as "new commits".
     2. **★ Asked for you:** you're in `reviewRequests`.
     3. **● New:** created in the last 24 h.
     4. **↑ Updated:** updated in the last 24 h, or you approved and new commits came in ("approved · 2 new commits").

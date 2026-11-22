@@ -20,7 +20,7 @@ test('the reviewed commit is read from our footer, old and new wording', () => {
   assert.equal(reviewedHead({ body: 'LGTM' }), null);
 });
 
-test('only PRs that still need my review are listed, newest first', async () => {
+test('only PRs that still need my review are listed, by state then newest first', async () => {
   const lookups = [];
   const { prs, hidden, open } = await candidatePrs([
     pr(1),
@@ -34,8 +34,9 @@ test('only PRs that still need my review are listed, newest first', async () => 
     pr(9, { author: { login: 'dependabot[bot]', is_bot: true } }),
     pr(11, { latestReviews: [review('APPROVED', 'manual approval')] }),
     pr(12, { latestReviews: [review('APPROVED', 'manual approval, commit unknown')] }),
-  ], ME, { commitOf: async (number) => { lookups.push(number); return number === 11 ? HEAD : null; } });
-  assert.deepEqual(prs.map((item) => item.number), [6, 4, 3, 12, 1]);
+  ], ME, { now: Date.parse('2026-11-30T10:00:00Z'), commitOf: async (number) => { lookups.push(number); return number === 11 ? HEAD : null; } });
+  // #3 had changes requested at an older commit: fixes pushed, first. The rest wait, newest activity first.
+  assert.deepEqual(prs.map((item) => [item.number, item.state.key]), [[3, 'fixes'], [6, 'waiting'], [4, 'waiting'], [12, 'waiting'], [1, 'waiting']]);
   assert.deepEqual(hidden, { reviewed: 3, draft: 1, yours: 1, bot: 1 });
   assert.equal(open, 11);
   assert.deepEqual(lookups, [11, 12]);
@@ -123,4 +124,84 @@ test('without a URL, main needs a terminal and defaultRepository, then reviews t
   assert.equal(asked, 'acme/widget');
   await writeFile(configPath, JSON.stringify({ model: 'm', defaultRepository: 'not a repo' }));
   await assert.rejects(main([], { configPath, interactive: true }), /defaultRepository .* must look like owner\/repo/);
+});
+
+const NOW = Date.parse('2026-11-23T12:00:00Z');
+const hoursAgo = (h) => new Date(NOW - h * 3_600_000).toISOString();
+const statePr = (number, extra = {}) => ({
+  number, title: `PR ${number}`, author: { login: 'alice' }, isDraft: false, headRefOid: HEAD,
+  latestReviews: [], reviewRequests: [], createdAt: hoursAgo(24 * 30), updatedAt: hoursAgo(24 * 3), ...extra,
+});
+
+test('each PR gets one state, first match wins', async () => {
+  const { prState } = await import('../src/select.mjs');
+  const older = 'b'.repeat(40);
+  const commits = [{ oid: older, committedDate: hoursAgo(30) }, { oid: 'c'.repeat(40), committedDate: hoursAgo(5) }, { oid: HEAD, committedDate: hoursAgo(2) }];
+  const asked = statePr(2, { createdAt: hoursAgo(1), reviewRequests: [{ login: ME }] });
+  const cases = [
+    [prState(statePr(1, { commits }), ME, { mine: { state: 'CHANGES_REQUESTED' }, covered: older.slice(0, 7), now: NOW }), 'fixes', '2 new commits · 2h'],
+    [prState(statePr(1, { commits }), ME, { mine: { state: 'APPROVED' }, covered: older, now: NOW }), 'updated', 'approved · 2 new commits'],
+    [prState(asked, ME, { now: NOW }), 'requested', 'requested · 3d'],
+    [prState(statePr(3, { createdAt: hoursAgo(0.5) }), ME, { now: NOW }), 'new', 'opened 30m ago'],
+    [prState(statePr(4, { updatedAt: hoursAgo(3) }), ME, { now: NOW }), 'updated', 'updated 3h ago'],
+    [prState(statePr(5), ME, { now: NOW }), 'waiting', '3d'],
+    [prState(statePr(6, { updatedAt: hoursAgo(24 * 23) }), ME, { now: NOW }), 'stale', 'idle 23d'],
+    [prState(statePr(7, { createdAt: undefined, updatedAt: undefined }), ME, { now: NOW }), 'waiting', ''],
+  ];
+  for (const [state, key, label] of cases) assert.deepEqual([state.key, state.label], [key, label]);
+  assert.equal(prState(statePr(8, { updatedAt: hoursAgo(24 * 13) }), ME, { now: NOW }).key, 'waiting', 'stale starts at 14 days');
+});
+
+test('a re-requested review is listed even when you reviewed the current head', async () => {
+  const again = statePr(9, { latestReviews: [review('APPROVED', 'Reviewed at `a7e50c8` with AI assistance.')], reviewRequests: [{ login: ME }] });
+  const { prs, hidden } = await candidatePrs([again], ME, { now: NOW });
+  assert.deepEqual([prs.map((pr) => pr.state.key), hidden.reviewed], [['requested'], 0]);
+});
+
+test('rows show the state icon and a right-aligned label; colour off keeps the meaning', async () => {
+  const { pickerRows } = await import('../src/select.mjs');
+  const { prs } = await candidatePrs([statePr(5), statePr(3, { createdAt: hoursAgo(1) }), statePr(6, { updatedAt: hoursAgo(24 * 20) })], ME, { now: NOW });
+  const { rows, map } = pickerRows(prs, 70);
+  assert.deepEqual(rows.filter((row) => typeof row === 'object').map((row) => row.heading), ['New', 'Waiting']);
+  assert.deepEqual(map.map((pr) => pr?.number ?? null), [null, 3, null, 5, 6]);
+  const lines = rows.filter((row) => typeof row === 'string');
+  assert.match(lines[0], /^● #3  alice  PR 3 +opened 1h ago$/);
+  assert.match(lines[2], /^◌ #6  alice  PR 6 +idle 20d$/);
+  assert(lines.every((line) => line.length === lines[0].length && line.length <= 70), lines.join('\n'));
+  const skipped = pickerRows(prs, 70, { skipped: (pr) => pr.number === 5 }).rows.find((row) => typeof row === 'string' && row.includes('#5'));
+  assert.match(skipped, /skipped · 3d$/);
+});
+
+test('the cursor skips group headings', async () => {
+  const term = fakeTerminal();
+  const picked = pickFromList('t', [{ heading: 'New' }, '#1', { heading: 'Waiting' }, '#2'], term);
+  term.press('up', 'down', 'return');
+  assert.equal(await picked, 3);
+  assert.match(term.text(), /New[\s\S]*❯ #1/);
+});
+
+test('s skips a PR until its head changes, a shows skipped PRs again', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'picker-state-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const statePath = join(dir, 'state', 'picker.json');
+  let open = [statePr(42), statePr(43)];
+  const adapters = { findClone: async () => {}, viewer: async () => ME, listOpenPrs: async () => open, reviewCommit: async () => null };
+  const run = async (...keys) => {
+    const term = fakeTerminal();
+    const url = choosePr('acme/widget', adapters, { ...term, statePath, now: NOW, live: false, reporter: { start() {}, finish() {} } });
+    term.press(...keys);
+    return { url: await url, text: term.text() };
+  };
+  const first = await run('s', 'return');
+  assert.equal(first.url, 'https://github.com/acme/widget/pull/43');
+  assert.match(first.text, /1 to review, 1 skipped/);
+  const { readFile } = await import('node:fs/promises');
+  assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')), { skipped: { 'acme/widget#42': HEAD } });
+  assert.equal((await run('return')).url, 'https://github.com/acme/widget/pull/43', 'still skipped next time');
+  const shown = await run('a', 'up', 'return'); // a keeps the cursor on #43; #42 reappears above it
+  assert.equal(shown.url, 'https://github.com/acme/widget/pull/42');
+  assert.match(shown.text, /skipped · 3d/);
+  open = [statePr(42, { headRefOid: 'd'.repeat(40) }), statePr(43)];
+  assert.equal((await run('return')).url, 'https://github.com/acme/widget/pull/42', 'a new commit ends the skip');
+  assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')), { skipped: { 'acme/widget#42': HEAD } }, 'pruned only when saved');
 });

@@ -1,9 +1,18 @@
 import { emitKeypressEvents } from 'node:readline';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { palette, plainReporter, short } from './ui.mjs';
 import { isLive, runSteps } from './steps.mjs';
+import { isSkipped, loadSkips, saveSkips, skipKey } from './picker-state.mjs';
 
-// Which open PRs still need your review, and an arrow-key picker for them.
-// Listing uses read-only gh calls only; no model is involved.
+// Which open PRs still need your review, what state each is in, and an
+// arrow-key picker for them. Listing uses read-only gh calls only; no model is
+// involved. The only write is the local skip list (state/picker.json).
+
+const DEFAULT_STATE = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'state', 'picker.json');
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+const STALE_DAYS = 14;
 
 // The commit a posted review covered, read from our footer: "Reviewed at
 // `a7e50c8`…", or "…by pr-review at `c0ffee1`…" in older posts.
@@ -12,25 +21,70 @@ export function reviewedHead(review) {
 }
 
 const isBot = (author) => Boolean(author?.is_bot) || /\[bot\]$/.test(author?.login ?? '');
+const isRequested = (pr, viewer) => (pr.reviewRequests ?? []).some((request) => request?.login === viewer);
 
-// Keeps the PRs worth reviewing: no review from you yet, or your latest
-// review was dismissed or covers an older commit. Drafts, your own PRs and
-// bot PRs are hidden. When the reviewed commit can't be found, the PR is
-// shown: listing too much is safer than hiding one.
-export async function candidatePrs(prs, viewer, { commitOf = async () => null } = {}) {
+// Each state has a priority (rank), an icon and a colour, so the meaning never
+// depends on colour alone. Stale shares the Waiting heading and sorts after it.
+export const STATES = {
+  fixes: { rank: 0, icon: '⟳', heading: 'Fixes pushed', color: 'yellow' },
+  requested: { rank: 1, icon: '★', heading: 'Asked for you', color: 'magenta' },
+  new: { rank: 2, icon: '●', heading: 'New', color: 'green' },
+  updated: { rank: 3, icon: '↑', heading: 'Updated', color: 'cyan' },
+  waiting: { rank: 4, icon: '·', heading: 'Waiting', color: null },
+  stale: { rank: 5, icon: '◌', heading: 'Waiting', color: null, dim: true },
+};
+
+// "40m", "5h", "3d".
+export function age(ms) {
+  if (ms < HOUR) return `${Math.max(1, Math.round(ms / 60_000))}m`;
+  if (ms < DAY) return `${Math.round(ms / HOUR)}h`;
+  return `${Math.floor(ms / DAY)}d`;
+}
+
+// The state of one listed PR, first match wins. `mine` is your latest review
+// (null when none or dismissed); `covered` is the commit it covered.
+export function prState(pr, viewer, { mine = null, covered = null, now = Date.now() } = {}) {
+  const at = (key) => ({ key, ...STATES[key] });
+  // Milliseconds since a timestamp, or null when it's missing: unknown is never "new".
+  const since = (iso) => { const time = Date.parse(iso ?? ''); return Number.isNaN(time) ? null : now - time; };
+  const ago = (iso) => (since(iso) === null ? '' : age(since(iso)));
+  const within = (iso, ms) => since(iso) !== null && since(iso) < ms;
+  const head = String(pr.headRefOid ?? '');
+  if (mine && covered && !head.startsWith(covered)) {
+    const commits = pr.commits ?? [];
+    const index = commits.findIndex((commit) => String(commit?.oid ?? '').startsWith(covered));
+    const count = index >= 0 ? commits.length - index - 1 : 0;
+    const what = count ? `${count} new commit${count === 1 ? '' : 's'}` : 'new commits';
+    // You approved: lower priority than fixes pushed after your change request.
+    if (mine.state === 'APPROVED') return { ...at('updated'), label: `approved · ${what}` };
+    return { ...at('fixes'), label: [what, ago(commits.at(-1)?.committedDate ?? pr.updatedAt)].filter(Boolean).join(' · ') };
+  }
+  if (isRequested(pr, viewer)) return { ...at('requested'), label: ['requested', ago(pr.updatedAt)].filter(Boolean).join(' · ') };
+  if (within(pr.createdAt, DAY)) return { ...at('new'), label: `opened ${ago(pr.createdAt)} ago` };
+  if (within(pr.updatedAt, DAY)) return { ...at('updated'), label: `updated ${ago(pr.updatedAt)} ago` };
+  if (since(pr.updatedAt) >= STALE_DAYS * DAY) return { ...at('stale'), label: `idle ${Math.floor(since(pr.updatedAt) / DAY)}d` };
+  return { ...at('waiting'), label: ago(pr.updatedAt) };
+}
+
+// Keeps the PRs worth reviewing, each with its state: no review from you yet,
+// or your latest review was dismissed, covers an older commit, or you were
+// asked again. Drafts, your own PRs and bot PRs are hidden. When the reviewed
+// commit can't be found, the PR is shown: listing too much is safer than
+// hiding one. Sorted by state priority, then most recent activity.
+export async function candidatePrs(prs, viewer, { commitOf = async () => null, now = Date.now() } = {}) {
   const hidden = { reviewed: 0, draft: 0, yours: 0, bot: 0 };
   const kept = [];
   for (const pr of prs) {
     if (pr.isDraft) { hidden.draft++; continue; }
     if (pr.author?.login === viewer) { hidden.yours++; continue; }
     if (isBot(pr.author)) { hidden.bot++; continue; }
-    const mine = (pr.latestReviews ?? []).filter((review) => review.author?.login === viewer).at(-1);
-    if (!mine || mine.state === 'DISMISSED') { kept.push(pr); continue; }
-    const covered = reviewedHead(mine) ?? (mine.commit?.oid || await commitOf(pr.number));
-    if (covered && String(pr.headRefOid ?? '').startsWith(covered)) { hidden.reviewed++; continue; }
-    kept.push(pr);
+    const latest = (pr.latestReviews ?? []).filter((review) => review.author?.login === viewer).at(-1);
+    const mine = latest && latest.state !== 'DISMISSED' ? latest : null;
+    const covered = mine ? reviewedHead(mine) ?? (mine.commit?.oid || await commitOf(pr.number)) : null;
+    if (covered && String(pr.headRefOid ?? '').startsWith(covered) && !isRequested(pr, viewer)) { hidden.reviewed++; continue; }
+    kept.push({ ...pr, state: prState(pr, viewer, { mine, covered, now }) });
   }
-  kept.sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
+  kept.sort((a, b) => a.state.rank - b.state.rank || String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
   return { prs: kept, hidden, open: prs.length };
 }
 
@@ -42,35 +96,64 @@ export function hiddenSummary({ hidden, open }) {
   return `${open} open${parts.length ? `; hidden: ${parts.join(', ')}` : ''}`;
 }
 
-// "#61  author  title", with numbers and authors aligned across the list.
-export function formatRows(prs, width = 100) {
+// "#61  author  title", with numbers and authors aligned across the list. A PR
+// with a state also gets its icon in front and its label right-aligned, both
+// in the state's colour; stale and skipped rows are dimmed whole.
+export function formatRows(prs, width = 100, { color = false } = {}) {
+  const c = palette(color);
   const numberWidth = Math.max(0, ...prs.map((pr) => String(pr.number).length)) + 1;
   const authorWidth = Math.min(28, Math.max(0, ...prs.map((pr) => (pr.author?.login ?? '').length)));
+  const labelWidth = Math.max(0, ...prs.map((pr) => (pr.state?.label ?? '').length));
   return prs.map((pr) => {
     const head = `${`#${pr.number}`.padEnd(numberWidth)}  ${short(pr.author?.login ?? '', authorWidth).padEnd(authorWidth)}  `;
-    return head + short(pr.title ?? '', Math.max(10, width - head.length - 4));
+    if (!pr.state) return head + short(pr.title ?? '', Math.max(10, width - head.length - 4));
+    const titleWidth = Math.max(10, width - head.length - labelWidth - 8);
+    const text = `${short(pr.title ?? '', titleWidth).padEnd(titleWidth)}  `;
+    if (pr.state.dim) return c.dim(`${pr.state.icon} ${head}${text}${pr.state.label.padStart(labelWidth)}`);
+    const tint = (part) => (pr.state.color ? c[pr.state.color](part) : part);
+    return `${tint(pr.state.icon)} ${head}${text}${tint(pr.state.label.padStart(labelWidth))}`;
   });
 }
 
-// Arrow-key picker. Returns the chosen index, or null when cancelled.
-// ↑/↓ or k/j move, Enter picks, q, Esc or Ctrl-C cancels.
-export function pickFromList(title, rows, { input = process.stdin, output = process.stderr, initial = 0, hint = 'Enter review · q cancel' } = {}) {
+// Arrow-key picker. Returns the chosen row's index, or null when cancelled.
+// ↑/↓ or k/j move, Enter picks, q, Esc or Ctrl-C cancels. A row given as
+// { heading } is a group title the cursor skips. `actions` maps a key to a
+// handler (index) => { rows, title, index } | undefined, to redraw the list.
+export function pickFromList(title, rows, { input = process.stdin, output = process.stderr, initial = 0, hint = 'Enter review · q cancel', actions = {} } = {}) {
   const c = palette(!process.env.NO_COLOR && output.isTTY !== false);
   return new Promise((resolve) => {
-    let index = Math.min(Math.max(0, initial), rows.length - 1);
+    let items = rows;
+    let heading = title;
+    const isHeading = (i) => typeof items[i] === 'object' && items[i] !== null;
+    const selectable = (i) => i >= 0 && i < items.length && !isHeading(i);
+    const nearest = (from, step) => {
+      let i = from;
+      while (i >= 0 && i < items.length && !selectable(i)) i += step;
+      return selectable(i) ? i : null;
+    };
+    const settle = (from) => {
+      const start = Math.min(Math.max(0, from), items.length - 1);
+      return nearest(start, 1) ?? nearest(start, -1) ?? 0;
+    };
+    let index = settle(initial);
     let top = 0;
     let drawn = 0;
-    const height = () => Math.max(3, Math.min(rows.length, (output.rows || 24) - 4));
+    const height = () => Math.max(3, Math.min(items.length, (output.rows || 24) - 4));
     const draw = () => {
       if (drawn) output.write(`\x1b[${drawn}A\x1b[0J`);
       const size = height();
-      if (index < top) top = index;
+      // Keep a group's heading on screen above its first row.
+      const want = index > 0 && isHeading(index - 1) ? index - 1 : index;
+      if (want < top) top = want;
       if (index >= top + size) top = index - size + 1;
-      const lines = [c.bold(title)];
-      for (let i = top; i < Math.min(rows.length, top + size); i++) {
-        lines.push(i === index ? `${c.cyan('❯')} ${c.bold(rows[i])}` : `  ${rows[i]}`);
+      const lines = [c.bold(heading)];
+      for (let i = top; i < Math.min(items.length, top + size); i++) {
+        if (isHeading(i)) lines.push(`  ${c.dim(items[i].heading)}`);
+        else lines.push(i === index ? `${c.cyan('❯')} ${c.bold(items[i])}` : `  ${items[i]}`);
       }
-      const more = rows.length > size ? ` · ${index + 1}/${rows.length}` : '';
+      const choices = items.filter((_, i) => !isHeading(i)).length;
+      const position = items.slice(0, index + 1).filter((_, i) => !isHeading(i)).length;
+      const more = items.length > size ? ` · ${position}/${choices}` : '';
       lines.push(c.dim(`↑/↓ move · ${hint}${more}`));
       output.write(`${lines.join('\n')}\n`);
       drawn = lines.length;
@@ -82,12 +165,19 @@ export function pickFromList(title, rows, { input = process.stdin, output = proc
       resolve(value);
     };
     const onKey = (text, key = {}) => {
-      if (key.name === 'up' || text === 'k') index = Math.max(0, index - 1);
-      else if (key.name === 'down' || text === 'j') index = Math.min(rows.length - 1, index + 1);
-      else if (key.name === 'return' || key.name === 'enter') return finish(index);
+      if (key.name === 'up' || text === 'k') index = nearest(index - 1, -1) ?? index;
+      else if (key.name === 'down' || text === 'j') index = nearest(index + 1, 1) ?? index;
+      else if (key.name === 'return' || key.name === 'enter') return selectable(index) ? finish(index) : undefined;
       else if (key.name === 'escape' || text === 'q' || (key.ctrl && key.name === 'c')) return finish(null);
-      else return;
+      else if (text && actions[text]) {
+        const update = actions[text](index);
+        if (!update) return undefined;
+        items = update.rows ?? items;
+        heading = update.title ?? heading;
+        index = settle(update.index ?? index);
+      } else return undefined;
       draw();
+      return undefined;
     };
     emitKeypressEvents(input);
     try { input.setRawMode?.(true); } catch { /* not a terminal */ }
@@ -97,11 +187,34 @@ export function pickFromList(title, rows, { input = process.stdin, output = proc
   });
 }
 
+// Rows for the picker: a heading per state group, then that group's PRs.
+// Returns the rows and, per row, the PR it stands for (null for a heading).
+export function pickerRows(prs, width, { color = false, skipped = () => false } = {}) {
+  const shown = prs.map((pr) => (skipped(pr)
+    ? { ...pr, state: { ...pr.state, label: `skipped · ${pr.state.label}`, dim: true } }
+    : pr));
+  const lines = formatRows(shown, width, { color });
+  const rows = [];
+  const map = [];
+  let group = null;
+  shown.forEach((pr, i) => {
+    if (pr.state.heading !== group) {
+      group = pr.state.heading;
+      rows.push({ heading: group });
+      map.push(null);
+    }
+    rows.push(lines[i]);
+    map.push(prs[i]);
+  });
+  return { rows, map };
+}
+
 // Lists the default repository's PRs that need review and lets the person pick
 // one. The loading is a visible step ("Loading open PRs of owner/repo" with
-// what it is doing right now), so the terminal never sits silent. Returns the
-// PR URL, or null when nothing was picked.
-export async function choosePr(repo, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter() } = {}) {
+// what it is doing right now), so the terminal never sits silent. `s` skips
+// the highlighted PR until its head changes, `a` shows skipped PRs. Returns
+// the PR URL, or null when nothing was picked.
+export async function choosePr(repo, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now() } = {}) {
   const [owner, name] = repo.split('/');
   let list;
   await runSteps([{
@@ -113,6 +226,7 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
       const viewer = await adapters.viewer();
       const prs = await adapters.listOpenPrs(repo);
       list = await candidatePrs(prs, viewer, {
+        now,
         commitOf: (number) => {
           ui.status(`checking your review of #${number}`);
           return adapters.reviewCommit(repo, number, viewer);
@@ -125,11 +239,51 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
     output.write(`Nothing to review in ${repo} (${hiddenSummary(list)}).\n`);
     return null;
   }
-  const title = `${repo}: ${list.prs.length} to review (${hiddenSummary(list)})`;
-  const picked = await pickFromList(title, formatRows(list.prs, output.columns || 100), { input, output });
+  const skips = loadSkips(statePath);
+  // Skips of PRs that are closed or have new commits have ended; drop them.
+  for (const key of Object.keys(skips)) {
+    if (key.startsWith(`${repo}#`) && !list.prs.some((pr) => skipKey(repo, pr) === key && isSkipped(repo, pr, skips))) delete skips[key];
+  }
+  const skipped = (pr) => isSkipped(repo, pr, skips);
+  const color = !process.env.NO_COLOR && output.isTTY !== false;
+  const width = output.columns || 100;
+  let showSkipped = list.prs.every(skipped); // all skipped: show them rather than an empty list
+  let view;
+  const build = (focus) => {
+    const visible = showSkipped ? list.prs : list.prs.filter((pr) => !skipped(pr));
+    const count = list.prs.filter(skipped).length;
+    view = pickerRows(visible, width, { color, skipped });
+    const title = `${repo}: ${list.prs.length - count} to review${count ? `, ${count} skipped` : ''} (${hiddenSummary(list)})`;
+    const index = Math.max(0, view.map.findIndex((pr) => pr && pr.number === focus?.number));
+    return { rows: view.rows, title, index };
+  };
+  const save = () => {
+    try { saveSkips(statePath, skips); } catch { /* skipping is a convenience; never fail the pick */ }
+  };
+  const actions = {
+    s: (index) => {
+      const pr = view.map[index];
+      if (!pr) return undefined;
+      if (skipped(pr)) delete skips[skipKey(repo, pr)];
+      else skips[skipKey(repo, pr)] = pr.headRefOid;
+      save();
+      if (!list.prs.some((item) => !skipped(item))) showSkipped = true;
+      const next = view.map.slice(index + 1).find(Boolean) ?? view.map.slice(0, index).reverse().find(Boolean);
+      return build(showSkipped ? pr : next);
+    },
+    a: (index) => {
+      showSkipped = !showSkipped;
+      return build(view.map[index]);
+    },
+  };
+  const first = build(null);
+  const picked = await pickFromList(first.title, first.rows, {
+    input, output, initial: first.index, actions,
+    hint: 'Enter review · s skip until it changes · a show skipped · q cancel',
+  });
   if (picked === null) {
     output.write('Nothing selected.\n');
     return null;
   }
-  return `https://github.com/${repo}/pull/${list.prs[picked].number}`;
+  return `https://github.com/${repo}/pull/${view.map[picked].number}`;
 }

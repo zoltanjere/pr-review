@@ -317,19 +317,31 @@ Each entry has three parts:
   - The reviews may hold sensitive content.
 
 ### 7.3 PR picker: what is listed and why
-- **Decision:** Without a URL, the tool lists the open PRs of `defaultRepository` from one `gh pr list --json number,title,author,isDraft,headRefOid,latestReviews,updatedAt` call, and you pick one with the arrow keys (`src/select.mjs`).
+- **Decision:** Without a URL, the tool lists the open PRs of `defaultRepository` from one `gh pr list --json number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,commits,createdAt,updatedAt` call, and you pick one with the arrow keys (`src/select.mjs`).
   - **Listed:**
     - PRs with no review from you;
     - PRs whose latest review by you was dismissed;
-    - PRs whose latest review by you covered a commit other than the current head.
+    - PRs whose latest review by you covered a commit other than the current head;
+    - PRs where you were asked to review again, even if you reviewed the current head.
 
     Any review type counts.
   - **Hidden:** drafts, your own PRs and bot PRs.
-  - **Order:** most recently updated first. Rows show `#number  author  title` only.
+  - **States and order:** each PR gets one state, first match wins, shown with an icon, a colour and a label, and grouped under a heading in this order:
+    1. **⟳ Fixes pushed:** your latest review was Request changes or Comment, and there are commits after it ("3 new commits · 2h").
+    2. **★ Asked for you:** you're in `reviewRequests`.
+    3. **● New:** created in the last 24 h.
+    4. **↑ Updated:** updated in the last 24 h, or you approved and new commits came in ("approved · 2 new commits").
+    5. **Waiting:** the rest, with **◌** and a dimmed row for 14 days or more without an update ("idle 23d").
+
+    Within a group, the most recent activity comes first. A missing date counts as unknown, never as new.
+  - **Skip:** `s` hides a PR until its head commit changes, and `a` shows skipped PRs. The skip list is `state/picker.json`, which is git-ignored and keyed by `owner/repo#number` with the head at skip time. Skips that have ended are pruned when the list is saved.
 - **How the reviewed commit is found:** `gh pr list` leaves review commits empty. Our posted footer names the commit ("Reviewed at `<sha>`", or the older "pr-review at `<sha>`"), so it's read from there for free. Only reviews without that footer cost one `gh api …/pulls/<n>/reviews` call (`commit_id`). If no commit can be found, the PR is listed: showing too much is safer than hiding.
 - **Why:**
   - The re-list rule uses new commits, not the branch protection's "dismiss stale approvals" setting. Reading protection rules needs admin rights, and new commits after a Request changes also deserve a second look (user decision).
   - Listing uses no model, so it's free.
+  - **Colour is never the only signal:** the icon and label carry the state with `NO_COLOR` or in a pipe.
+  - **Fixes pushed comes first:** a PR where you asked for changes and the author answered is the most likely to need you next.
+  - **Skip is local and ends on its own:** it must never write to GitHub, and a new commit is exactly when a skipped PR deserves another look.
 - **Don't:** Hide a PR because its reviewed commit is unknown.
 
 ## 8. Evaluation

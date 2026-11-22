@@ -83,7 +83,32 @@ reviewpr                         # pick from defaultRepository's open PRs
 reviewpr --yes <url>             # no prompts, never posts; the digest goes to stdout
 ```
 
-The picker lists open PRs you haven't reviewed yet, plus ones with new commits since your review. Drafts, bot PRs and your own PRs are hidden. Use `↑`/`↓` to move, Enter to choose and `q` to cancel.
+The picker lists open PRs you haven't reviewed yet, plus ones with new commits since your review, grouped by what needs you most:
+
+```
+acme/widget: 6 to review, 1 skipped (8 open; hidden: 1 draft)
+  Fixes pushed
+❯ ⟳ #61  octo-dev   fix: resume uploads after a dropped connection      3 new commits · 2h
+  Asked for you
+  ★ #66  lee-park   chore: bump the test runner to the latest minor         requested · 5h
+  New
+  ● #68  octo-dev   feat: show upload progress in the status bar            opened 42m ago
+  Updated
+  ↑ #52  ana-dev    refactor: split the queue worker                        updated 3h ago
+  Waiting
+  · #49  sam-codes  docs: explain chunk sizes                                           4d
+  ◌ #31  lee-park   feat: offline mode                                            idle 23d
+```
+
+- **Groups, most urgent first:**
+  - **⟳ Fixes pushed:** you requested changes or commented, and the author has pushed since.
+  - **★ Asked for you:** you're a requested reviewer.
+  - **● New:** opened in the last 24 h.
+  - **↑ Updated:** updated in the last 24 h. A PR you approved that has new commits also shows here.
+  - **Waiting:** the rest. **◌** marks PRs idle for 14 days or more.
+- **Hidden:** drafts, bot PRs and your own PRs.
+- **Keys:** `↑`/`↓` move, Enter reviews, and `q` cancels. `s` skips the highlighted PR until its author pushes a new commit, and `a` shows skipped PRs again (press `s` on one to unskip it).
+- **Where skips live:** in `state/picker.json` on your machine only, which is git-ignored. Nothing is written to GitHub.
 
 While it runs, each step shows a spinner, a timer, and its live tokens and AI credits:
 

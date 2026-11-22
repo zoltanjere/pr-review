@@ -58,12 +58,29 @@ Use IDs exactly as Copilot's `/model` lists them.
 
 **Node version:** you don't have to switch your shell to the version in `.nvmrc`. Started with an older Node, the tool restarts itself on the pinned one from your nvm folder; nothing global changes. Run `nvm use` before `npm ci` or `npm test`.
 
+### Run it from anywhere (optional)
+
+To start it as `reviewpr` from any folder, link the script into a folder on your `PATH`. `~/.local/bin` needs no `sudo`:
+
+```sh
+mkdir -p ~/.local/bin
+ln -s "$PWD/src/review.mjs" ~/.local/bin/reviewpr   # run inside this folder
+```
+
+If `command -v reviewpr` finds nothing, add `~/.local/bin` to your `PATH` in `~/.zshrc` or `~/.bashrc`, then open a new terminal:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+The link always runs this checkout, so `git pull` updates the command. Config, reviews and the Node version all come from this folder, whatever folder you start it in. To remove it, run `rm ~/.local/bin/reviewpr`.
+
 ## Usage
 
 ```sh
-node src/review.mjs <pr-url>     # review one PR
-node src/review.mjs              # pick from defaultRepository's open PRs
-node src/review.mjs --yes <url>  # no prompts, never posts; the digest goes to stdout
+reviewpr <pr-url>                # review one PR (or: node src/review.mjs <pr-url>)
+reviewpr                         # pick from defaultRepository's open PRs
+reviewpr --yes <url>             # no prompts, never posts; the digest goes to stdout
 ```
 
 The picker lists open PRs you haven't reviewed yet, plus ones with new commits since your review. Drafts, bot PRs and your own PRs are hidden. Use `↑`/`↓` to move, Enter to choose and `q` to cancel.

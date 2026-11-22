@@ -301,3 +301,14 @@ test('the model is reported once at the start of a run', async () => {
   plainReporter((line) => lines.push(line)).event('model', { model: 'claude-sonnet-5.5', checkModel: 'claude-haiku-5.5' });
   assert.deepEqual(lines, ['[progress] Model: claude-sonnet-5.5 · check: claude-haiku-5.5']);
 });
+
+test('the CLI also starts when run through a symlink, from another folder', async (t) => {
+  const { symlink } = await import('node:fs/promises');
+  const dir = await mkdtemp(join(tmpdir(), 'cli-link-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const link = join(dir, 'reviewpr');
+  await symlink(cli, link);
+  const run = spawnSync(process.execPath, [link], { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /Pass a PR URL, or run in a terminal/);
+});

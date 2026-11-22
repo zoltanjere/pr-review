@@ -5,6 +5,7 @@ This project follows [semantic versioning](https://semver.org/). A pipeline or t
 ## 0.3.0 (2026-11-22)
 
 - **Digest cleanup:** notes the model writes about itself (saving files, the sandbox, posting) are removed from the comment, with a warning saying what was cut.
+- **Run from anywhere:** the CLI now starts when run through a symlink, such as `~/.local/bin/reviewpr`; before, it exited without doing anything. The README shows how to set it up.
 - **Bypass rule:** a deliberate way past a new check is a Must fix only when the check is a protection (access, untrusted input, private data, merge or deploy gates). A new way around a best-effort heuristic is Should fix at most, and Minor when its limits are already documented.
 
 ## 0.2.0 (2026-11-22)

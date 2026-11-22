@@ -3,6 +3,7 @@
 import './node-version.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createAdapters, readConfig, REVIEWERS } from './adapters.mjs';
 import { choosePr } from './select.mjs';
@@ -213,7 +214,17 @@ export async function main(args, options = {}) {
   if (!process.stdout.isTTY) process.stdout.write(`${result.digest.trim()}\n`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Runs main only when this file is the program, also when started through a
+// symlink (e.g. ~/.local/bin/reviewpr): Node gives import.meta.url the real
+// path but leaves argv[1] as the link, so compare real paths.
+const isEntry = (() => {
+  try {
+    return Boolean(process.argv[1]) && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+  } catch {
+    return false;
+  }
+})();
+if (isEntry) {
   try {
     await main(process.argv.slice(2));
   } catch (error) {

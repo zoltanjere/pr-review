@@ -60,3 +60,19 @@ test('digestBody drops a group that only says None', async () => {
   assert.equal(digestBody(text).body, '### Should fix\n1. 🟡 **Real problem**\n   `a.py` · `f`\n\n<details><summary>1 minor item</summary>\n\n- `b.py:3`: unused.\n</details>');
   assert.equal(digestBody('### Must fix\nNone.').body, '');
 });
+
+test('the <details> summary is counted in code, including folded questions and should-fix items', async () => {
+  const { detailsSummary } = await import('../src/verdict.mjs');
+  const findings = [
+    ...[1, 2, 3, 4].map(() => f('Confirmed', 'Should fix')),
+    f('Question'), f('Question'),
+    ...[1, 2, 3, 4, 5].map(() => f('Confirmed', 'Minor')),
+    f('Rejected'),
+  ];
+  const body = '### Should fix\n1. 🟡 **a**\n2. 🟡 **b**\n3. 🟡 **c**\n4. 🟡 **d**\n\n### Questions\n5. ❓ One?\n\n<details><summary>6 minor items</summary>\n\n- q\n- m\n</details>';
+  assert.match(detailsSummary(body, findings), /<details><summary>1 question and 5 minor items<\/summary>/);
+  const more = '### Should fix\n1. 🟡 **a**\n2. 🟡 **b**\n\n<details><summary>whatever</summary>\n\n- x\n</details>';
+  assert.match(detailsSummary(more, findings), /<summary>2 should-fix, 2 questions and 5 minor items<\/summary>/);
+  assert.match(detailsSummary('<details><summary>3 minor items</summary>\n\n- x\n</details>', [f('Confirmed', 'Minor')]), /<summary>1 minor item<\/summary>/);
+  assert.equal(detailsSummary('### Should fix\n1. 🟡 **a**', findings), '### Should fix\n1. 🟡 **a**');
+});

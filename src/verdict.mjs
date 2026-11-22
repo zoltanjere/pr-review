@@ -42,8 +42,29 @@ export function verdictFromText(text) {
 // The digest as posted: the code-owned verdict line, then the skill's body.
 // Any verdict line the model wrote anyway is dropped.
 export function withVerdict(body, findings) {
-  const rest = String(body ?? '').replace(VERDICT_LINE, '').trim().replace(/^`?Nothing to raise\.?`?$/i, '');
+  const rest = detailsSummary(String(body ?? '').replace(VERDICT_LINE, '').trim().replace(/^`?Nothing to raise\.?`?$/i, ''), findings);
   return rest ? `${verdictFor(findings).line}\n\n${rest}` : verdictFor(findings).line;
+}
+
+// The <details> summary is counted in code, like the verdict line, so the two
+// always agree. It holds every Minor, plus the Should fix items and Questions
+// that didn't fit the visible slots (verify's count minus the numbered 🟡/❓
+// entries above <details>).
+const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+export function detailsSummary(body, findings = []) {
+  const open = /<details>\s*<summary>[^<]*<\/summary>/i;
+  if (!open.test(body)) return body;
+  const visible = body.split(/<details\b/i)[0];
+  const shown = (icon) => (visible.match(new RegExp(`^\\s*\\d+[.)]\\s*${icon}`, 'gmu')) ?? []).length;
+  const count = (test) => findings.filter(test).length;
+  const folded = [
+    [count((f) => f.status === 'Confirmed' && f.priority === 'Should fix') - shown('🟡'), 'should-fix', 'should-fix'],
+    [count((f) => f.status === 'Question') - shown('❓'), 'question', 'questions'],
+    [count((f) => f.status === 'Confirmed' && f.priority === 'Minor'), 'minor item', 'minor items'],
+  ].filter(([n]) => n > 0).map(([n, one, many]) => plural(n, one, many));
+  if (!folded.length) return body;
+  const text = folded.length === 1 ? folded[0] : `${folded.slice(0, -1).join(', ')} and ${folded.at(-1)}`;
+  return body.replace(open, `<details><summary>${text}</summary>`);
 }
 
 // Rewrites the verdict line when it contradicts the review type the person chose.

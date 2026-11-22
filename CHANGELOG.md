@@ -2,6 +2,10 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.4.1 (2026-11-23)
+
+- **Details summary:** the `<details>` summary is counted in code from verify's findings, including Should fix items and Questions folded there when the visible slots are full ("1 question and 5 minor items"), so it always matches the verdict line.
+
 ## 0.4.0 (2026-11-23)
 
 - **Empty groups:** a digest group that only says `None.` (for example `### Must fix` with nothing under it) is removed from the comment.

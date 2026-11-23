@@ -11,6 +11,7 @@ import { plainReporter, toReporter } from './ui.mjs';
 import { createRouter, isLive, runSteps } from './steps.mjs';
 import { printSummary } from './confirm.mjs';
 import { publishInTerminal } from './publish.mjs';
+import { watchCommand } from './watch-run.mjs';
 
 const STAGES = [...REVIEWERS, 'verified', 'digest'].join('|');
 
@@ -175,10 +176,11 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
 }
 
 export async function main(args, options = {}) {
+  if (args[0] === 'watch') return watchCommand(args.slice(1), options);
   const flags = args.filter((arg) => arg.startsWith('-'));
   const urls = args.filter((arg) => !arg.startsWith('-'));
   const unknown = flags.filter((flag) => !['-y', '--yes'].includes(flag));
-  if (urls.length > 1 || unknown.length) throw new Error('Usage: node src/review.mjs [--yes] [<GitHub PR URL>]');
+  if (urls.length > 1 || unknown.length) throw new Error('Usage: reviewpr [--yes] [<GitHub PR URL>]\n       reviewpr watch [--once | --install | --uninstall]');
   const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const interactive = options.interactive ?? Boolean(!flags.length && process.stdin.isTTY && process.stderr.isTTY);
   let url = urls[0];

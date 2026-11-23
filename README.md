@@ -50,11 +50,11 @@ reviewpr watch --install                          # get notified in the backgrou
 - **Right away:** a background check is installed and runs once. That first check only records the PRs that are already open, so **you see nothing at first. That's expected.**
 - **Every 5 minutes after that,** it checks GitHub. When something changed, a macOS banner appears in the top-right corner:
   ```
-  reviewpr · acme/widget
+  ⟳ #61 fixes pushed
   fix: resume uploads after a dropped connection
-  ⟳ #61 fixes pushed · 2 new commits
+  by octo-dev · 2 new commits · acme/widget
   ```
-  Clicking it opens the PR in your browser. To review it, run `reviewpr` in a terminal.
+  The first line says what happened, the second is the PR title, the third says who and how much. It plays the default sound, and clicking it opens the PR in your browser. To review it, run `reviewpr` in a terminal.
 - **Reboots and sleep:** it keeps working after a reboot without a terminal open. If the Mac was asleep, it checks when it wakes.
 - **Cost:** none. It only reads GitHub through `gh` and uses no model. It never posts and never starts a review.
 - **Defaults:** every event is on (`all`). Pick fewer in `config.json` (see [Watch](#watch)), then run `reviewpr watch --install` again.

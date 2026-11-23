@@ -60,7 +60,7 @@ test('fixes-after-changes: pushes after my Request changes notify once per head,
   const pushed = reviewed.map((item) => ({ ...item, headRefOid: NEW }));
   const events = ['fixes-after-changes'];
   const { notifications, memory } = await polls(reviewed, pushed, { events });
-  assert.deepEqual(notifications.map((n) => [n.number, n.events, n.text]), [[1, ['fixes-after-changes'], '⟳ #1 fixes pushed · 2 new commits']]);
+  assert.deepEqual(notifications.map((n) => [n.number, n.events, n.text]), [[1, ['fixes-after-changes'], '⟳ #1 fixes pushed by alice · 2 new commits']]);
   assert.deepEqual(watchEvents({ repo: REPO, scan: await scan(pushed), memory, events, now: NOW }).notifications, []);
 });
 
@@ -68,7 +68,7 @@ test('reviewed-updated covers every review type, and one push gives one notifica
   const reviewed = [pr(1, { latestReviews: [myReview('CHANGES_REQUESTED')] }), pr(2, { latestReviews: [myReview('APPROVED')] }), pr(3, { latestReviews: [myReview('COMMENTED')] })];
   const pushed = reviewed.map((item) => ({ ...item, headRefOid: NEW }));
   const both = await polls(reviewed, pushed, { events: ['fixes-after-changes', 'reviewed-updated'] });
-  assert.deepEqual(both.notifications.map((n) => n.text), ['⟳ #1 fixes pushed · 2 new commits', '↑ #2 updated since your approval · 2 new commits', '↑ #3 updated since your comment · 2 new commits']);
+  assert.deepEqual(both.notifications.map((n) => n.text), ['⟳ #1 fixes pushed by alice · 2 new commits', '↑ #2 updated since your approval · by alice · 2 new commits', '↑ #3 updated since your comment · by alice · 2 new commits']);
   const only = await polls(reviewed, pushed, { events: ['reviewed-updated'] });
   assert.deepEqual(only.notifications.map((n) => n.events[0]), ['reviewed-updated', 'reviewed-updated', 'reviewed-updated']);
 });
@@ -106,7 +106,7 @@ test('review-requested notifies on a new request, combined with new into one not
   const asked = { reviewRequests: [{ login: ME }] };
   const { notifications } = await polls([pr(1)], [pr(1, asked), pr(2, { ...asked, author: { login: 'octo-dev' } })], { events: ['new', 'review-requested'] });
   assert.deepEqual(notifications.map((n) => [n.number, n.events, n.text]), [
-    [1, ['review-requested'], '★ #1 review requested'],
+    [1, ['review-requested'], '★ #1 review requested · PR by alice'],
     [2, ['new', 'review-requested'], '● #2 new PR from octo-dev · review requested'],
   ]);
 });
@@ -116,7 +116,7 @@ test('my-pr-reviewed: a new review from someone else on my PR, not my own commen
   const { notifications } = await polls([mine([review('ana', 'COMMENTED', '2026-11-22T10:00:00Z')])], [mine([
     review('ana', 'APPROVED'), review('sam', 'CHANGES_REQUESTED'), review(ME, 'COMMENTED'), review('copilot-pull-request-reviewer', 'COMMENTED'),
   ])], { events: ['my-pr-reviewed'] });
-  assert.deepEqual(notifications.map((n) => n.text), ['✅ your #1: approved by ana, changes requested by sam']);
+  assert.deepEqual(notifications.map((n) => n.text), ['✅ your #1 got a review · approved by ana, changes requested by sam']);
 });
 
 test('my-pr-conflicts: notifies on the change to conflicting, ignores UNKNOWN, again only after mergeable', async () => {
@@ -128,11 +128,11 @@ test('my-pr-conflicts: notifies on the change to conflicting, ignores UNKNOWN, a
     memory = result.memory;
     return result.notifications.map((n) => n.text);
   };
-  assert.deepEqual(await step('CONFLICTING'), ['⚠ your #1 has merge conflicts']);
+  assert.deepEqual(await step('CONFLICTING'), ['⚠ your #1 has merge conflicts · update it from the base branch']);
   assert.deepEqual(await step('UNKNOWN'), []);
   assert.deepEqual(await step('CONFLICTING'), []);
   assert.deepEqual(await step('MERGEABLE'), []);
-  assert.deepEqual(await step('CONFLICTING'), ['⚠ your #1 has merge conflicts']);
+  assert.deepEqual(await step('CONFLICTING'), ['⚠ your #1 has merge conflicts · update it from the base branch']);
 });
 
 test('disabled events never fire', async () => {
@@ -143,9 +143,10 @@ test('disabled events never fire', async () => {
 
 test('notify uses terminal-notifier with the PR link and a group per PR, osascript when it is missing', async () => {
   const calls = [];
-  const notification = { repo: REPO, number: 61, title: 'fix: "quotes" & $(stuff)', url: 'https://github.com/acme/widget/pull/61', text: '⟳ #61 fixes pushed' };
+  const notification = { repo: REPO, number: 61, title: 'fix: "quotes" & $(stuff)', url: 'https://github.com/acme/widget/pull/61',
+    headline: '⟳ #61 fixes pushed', detail: 'by octo-dev · 2 new commits', text: '⟳ #61 fixes pushed by octo-dev · 2 new commits' };
   assert.equal(await notify(notification, { exec: async (...args) => { calls.push(args); } }), 'terminal-notifier');
-  assert.deepEqual(calls[0], ['terminal-notifier', ['-title', 'reviewpr · acme/widget', '-subtitle', 'fix: "quotes" & $(stuff)', '-message', '⟳ #61 fixes pushed',
+  assert.deepEqual(calls[0], ['terminal-notifier', ['-title', '⟳ #61 fixes pushed', '-subtitle', 'fix: "quotes" & $(stuff)', '-message', 'by octo-dev · 2 new commits · acme/widget',
     '-open', 'https://github.com/acme/widget/pull/61', '-group', 'acme/widget#61', '-sound', 'default']]);
   const fallback = [];
   const missing = async (command, args) => {
@@ -156,7 +157,7 @@ test('notify uses terminal-notifier with the PR link and a group per PR, osascri
   const [command, args] = fallback[1];
   assert.equal(command, 'osascript');
   // The title is an argument, never part of the AppleScript source.
-  assert.deepEqual(args.slice(-3), ['⟳ #61 fixes pushed · run reviewpr', 'reviewpr · acme/widget', 'fix: "quotes" & $(stuff)']);
+  assert.deepEqual(args.slice(-3), ['by octo-dev · 2 new commits · acme/widget · run reviewpr', '⟳ #61 fixes pushed', 'fix: "quotes" & $(stuff)']);
   assert(!args.slice(0, -3).some((arg) => arg.includes('quotes')));
   // terminal-notifier installed but refused by macOS: still shown via osascript.
   const refused = async (command) => { if (command === 'terminal-notifier') throw new Error('Notifications are not allowed for this application'); };

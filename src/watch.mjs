@@ -84,8 +84,13 @@ export function watchEvents({ repo, scan, memory = {}, events = WATCH_EVENTS, sk
   const notifications = [];
   const add = (pr, parts) => {
     if (!parts.length) return;
-    const text = [parts[0].text, ...parts.slice(1).map((part) => part.tag)].join(' · ');
-    notifications.push({ repo, number: pr.number, title: pr.title ?? '', url: pr.url ?? prUrl(repo, pr.number), events: parts.map((part) => part.event), text });
+    // Banner: headline (what happened: the first event, then the others'
+    // tags) and detail (who, how much). text is one line, for the log and app.
+    const others = parts.slice(1).map((part) => part.tag);
+    const headline = [parts[0].head, ...others].join(' · ');
+    const detail = parts[0].detail ?? '';
+    const text = [parts[0].text ?? [parts[0].head, detail].filter(Boolean).join(' · '), ...others].join(' · ');
+    notifications.push({ repo, number: pr.number, title: pr.title ?? '', url: pr.url ?? prUrl(repo, pr.number), events: parts.map((part) => part.event), headline, detail, text });
   };
 
   for (const pr of all) {
@@ -101,19 +106,19 @@ export function watchEvents({ repo, scan, memory = {}, events = WATCH_EVENTS, sk
     const actionable = !skipped(pr);
     const n = `#${pr.number}`;
     if (on.has('new') && actionable && entry.reviewable && !previous?.reviewable) {
-      parts.push({ event: 'new', text: `● ${n} new PR from ${entry.author}`, tag: 'new PR' });
+      parts.push({ event: 'new', head: `● ${n} new PR`, detail: `from ${entry.author}`, text: `● ${n} new PR from ${entry.author}`, tag: 'new PR' });
     }
     if (pushed && actionable) {
       const { review, commits } = candidate.state;
-      const count = commits ? ` · ${plural(commits, 'new commit')}` : '';
+      const detail = [`by ${entry.author}`, commits ? plural(commits, 'new commit') : null].filter(Boolean).join(' · ');
       if (review === 'CHANGES_REQUESTED' && (on.has('fixes-after-changes') || on.has('reviewed-updated'))) {
-        parts.push({ event: on.has('fixes-after-changes') ? 'fixes-after-changes' : 'reviewed-updated', text: `⟳ ${n} fixes pushed${count}`, tag: 'fixes pushed' });
+        parts.push({ event: on.has('fixes-after-changes') ? 'fixes-after-changes' : 'reviewed-updated', head: `⟳ ${n} fixes pushed`, detail, text: `⟳ ${n} fixes pushed ${detail}`, tag: 'fixes pushed' });
       } else if (review !== 'CHANGES_REQUESTED' && on.has('reviewed-updated')) {
-        parts.push({ event: 'reviewed-updated', text: `↑ ${n} updated since your ${REVIEW_NAMES[review] ?? 'review'}${count}`, tag: 'updated' });
+        parts.push({ event: 'reviewed-updated', head: `↑ ${n} updated since your ${REVIEW_NAMES[review] ?? 'review'}`, detail, tag: 'updated' });
       }
     }
     if (on.has('review-requested') && actionable && entry.requested && !previous?.requested) {
-      parts.push({ event: 'review-requested', text: `★ ${n} review requested`, tag: 'review requested' });
+      parts.push({ event: 'review-requested', head: `★ ${n} review requested`, detail: `PR by ${entry.author}`, tag: 'review requested' });
     }
     if (on.has('my-pr-reviewed') && entry.own && previous) {
       const seen = new Set(previous.reviews ?? []);
@@ -121,11 +126,11 @@ export function watchEvents({ repo, scan, memory = {}, events = WATCH_EVENTS, sk
         .map((signature) => signature.split(':')).filter(([, state]) => SAID[state]);
       if (fresh.length) {
         const lines = fresh.map(([login, state]) => `${SAID[state].text} ${login}`).join(', ');
-        parts.push({ event: 'my-pr-reviewed', text: `${SAID[fresh[0][1]].icon} your ${n}: ${lines}`, tag: lines });
+        parts.push({ event: 'my-pr-reviewed', head: `${SAID[fresh[0][1]].icon} your ${n} got a review`, detail: lines, tag: lines });
       }
     }
     if (on.has('my-pr-conflicts') && entry.own && entry.mergeable === 'CONFLICTING' && previous && previous.mergeable !== 'CONFLICTING') {
-      parts.push({ event: 'my-pr-conflicts', text: `⚠ your ${n} has merge conflicts`, tag: 'merge conflicts' });
+      parts.push({ event: 'my-pr-conflicts', head: `⚠ your ${n} has merge conflicts`, detail: 'update it from the base branch', tag: 'merge conflicts' });
     }
     add(pr, parts);
   }
@@ -142,14 +147,17 @@ export function watchEvents({ repo, scan, memory = {}, events = WATCH_EVENTS, sk
     const mattered = previous.reviewed || previous.own;
     if (on.has('merged') || (on.has('merged-reviewed') && mattered)) {
       const event = on.has('merged-reviewed') && mattered ? 'merged-reviewed' : 'merged';
-      add({ number, title: outcome.title, url: outcome.url }, [{ event, text: `✔ #${number} merged${outcome.mergedBy ? ` by ${outcome.mergedBy}` : ''}`, tag: 'merged' }]);
+      const detail = [outcome.mergedBy ? `by ${outcome.mergedBy}` : null, outcome.author && outcome.author !== outcome.mergedBy ? `PR from ${outcome.author}` : null].filter(Boolean).join(' · ');
+      add({ number, title: outcome.title, url: outcome.url }, [{ event, head: `✔ #${number} merged`, detail, text: [`✔ #${number} merged`, detail].filter(Boolean).join(' '), tag: 'merged' }]);
     }
   }
 
   return { notifications, memory: { primed: { ...memory.primed, [repo]: memory.primed?.[repo] ?? new Date(now).toISOString() }, open } };
 }
 
-// Shows one notification. terminal-notifier when installed and allowed
+// Shows one notification, laid out like a picker row: the headline (icon,
+// number, what happened) as the title, the PR title below it, then who and
+// how much, and the repository. terminal-notifier when installed and allowed
 // (clicking opens the PR; one notification per PR, a newer one replaces it),
 // otherwise osascript, which needs no setup but can't open a link. Returns
 // which one showed it. Arguments are passed as a list, never
@@ -159,9 +167,10 @@ const run = (command, args) => new Promise((resolve, reject) => {
 });
 
 export async function notify(notification, { exec = run } = {}) {
-  const title = `reviewpr · ${notification.repo}`;
+  const title = notification.headline ?? notification.text;
+  const message = [notification.headline ? notification.detail : null, notification.repo].filter(Boolean).join(' · ');
   try {
-    await exec('terminal-notifier', ['-title', title, '-subtitle', notification.title, '-message', notification.text,
+    await exec('terminal-notifier', ['-title', title, '-subtitle', notification.title, '-message', message,
       '-open', notification.url, '-group', prKey(notification.repo, notification.number), '-sound', 'default']);
     return 'terminal-notifier';
   } catch (error) {
@@ -170,7 +179,7 @@ export async function notify(notification, { exec = run } = {}) {
     try {
       // Clicking this one can't open the PR, so the text says where to find it.
       await exec('osascript', ['-e', 'on run argv', '-e', 'display notification (item 1 of argv) with title (item 2 of argv) subtitle (item 3 of argv)', '-e', 'end run',
-        `${notification.text} · run reviewpr`, title, notification.title]);
+        `${message} · run reviewpr`, title, notification.title]);
     } catch (fallback) {
       throw new Error(`terminal-notifier: ${error.message.trim()}; osascript: ${fallback.message.trim()}`);
     }

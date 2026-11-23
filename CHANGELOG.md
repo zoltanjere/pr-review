@@ -4,6 +4,7 @@ This project follows [semantic versioning](https://semver.org/). A pipeline or t
 
 ## Unreleased
 
+- **Watch notifications read like a picker row:** the title is what happened (`⟳ #61 fixes pushed`), then the PR title, then who and how much (`by octo-dev · 2 new commits · acme/widget`). Merges name who merged and who opened the PR.
 - **Watch notifications survive a blocked terminal-notifier:** when macOS refuses terminal-notifier, watch shows a plain osascript notification ending with "run reviewpr" instead of dropping it, and logs that it used the fallback.
 - **`watch --install` tests notifications:** it sends a test notification and reports the mode: clickable, plain, or not working.
 - **⚠️ recommends Comment only:** with Should fix as the worst finding, posting preselects Comment only, not Request changes. Only a Must fix recommends Request changes.

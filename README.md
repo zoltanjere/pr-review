@@ -34,7 +34,7 @@ If `command -v reviewpr` finds nothing, add `export PATH="$HOME/.local/bin:$PATH
 
 ```sh
 reviewpr https://github.com/acme/widget/pull/42   # review one PR
-reviewpr                                          # pick a PR from defaultRepository
+reviewpr                                          # pick a PR from defaultRepository, then review or summarise it
 reviewpr watch --install                          # get notified in the background
 ```
 
@@ -85,6 +85,7 @@ reviewpr <pr-url>              # review one PR (or: node src/review.mjs <pr-url>
 reviewpr                       # pick from defaultRepository's open PRs
 reviewpr --yes <url>           # no prompts, never posts; the digest goes to stdout
 reviewpr --full <url>          # a full review, even where a follow-up is possible
+reviewpr --summary <url>       # a short, plain summary of what the PR does; never posted
 reviewpr watch                 # the picker, kept open, with notifications
 reviewpr watch --install       # check in the background (launchd)
 reviewpr watch --uninstall     # remove the background check
@@ -155,7 +156,9 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
   - Details such as `3 new commits` follow the titles, and rows are at most 100 columns wide, so nothing drifts to the far edge of a wide terminal.
 - **Colours:** the icon and the group heading carry the state's colour. Without colour, the icons, ages and labels carry the same information.
 - **Hidden:** other people's drafts and bot PRs.
-- **Keys:** `↑`/`↓` move, Enter reviews (a follow-up where possible), `f` runs a full review instead, and `q` cancels. `s` skips the highlighted PR until its author pushes a new commit, and `a` shows skipped PRs again (press `s` on one to unskip it).
+- **Keys:** `↑`/`↓` move, Enter picks the PR, `f` starts a full review straight away, and `q` cancels.
+  - **After Enter,** a small menu asks what to do: **Review it** (the default, so Enter twice reviews as before, a follow-up where possible), **Summarise it first** (see [PR summary](#pr-summary)), or **Back to the list**.
+  - **Other keys:** `s` skips the highlighted PR until its author pushes a new commit, and `a` shows skipped PRs again (press `s` on one to unskip it).
 - **Where this is kept:** skips and the time you last looked live in `state/picker.json` on your machine only, which is git-ignored. Nothing is written to GitHub.
 
 ### Watch
@@ -191,7 +194,7 @@ Watch sends a macOS notification when something you care about changes. It check
   - Its log is `state/watch.log`. Run `--install` again after changing `watch` in `config.json`.
 - **In a terminal** (`reviewpr watch`): the picker, kept open.
   - It checks on the same interval, refreshes the list in place and marks new items with `•` until you move onto them. `r` checks immediately.
-  - Enter reviews the highlighted PR right there, and you come back to the list afterwards. Checking continues during a review, as desktop notifications only.
+  - Enter opens the same menu (Review it, Summarise it first, Back to the list) for the highlighted PR, right there, and you come back to the list afterwards. Checking continues during a review, as desktop notifications only.
   - Merges and events on your own PRs appear on the status line, such as `✔ #61 merged by lee-park · 2m ago`.
   - While it's open, the background check stays quiet, so you never get two notifications for one change.
   - A failed check keeps the last list on screen and says so, and the third failure in a row sends one notification.
@@ -285,6 +288,30 @@ digest  ── verdict, a re-review notice for the author, still open, new, reso
 - **A rebase with no changes** is still a follow-up, not a full review: your findings apply to the same code, so it checks them against the replies and the current code, and the notice says `(rebased, no changes to the PR's code)`.
 - **Not tracked:** minor items from the earlier review (they were optional), and reviews by other people.
 
+### PR summary
+
+**Summarise it first** (or `--summary`) tells you what a PR does before you spend a review on it. One model session (the check model) reads the PR description, its linked issues and the code changes, and writes a short, plain description for a developer who doesn't know that part of the code. PR descriptions are often long and full of evidence; this isn't.
+
+```
+Uploads now pick up where they stopped after a dropped connection, instead of starting again.
+
+What changes
+• A large file that loses its connection halfway resumes from the last finished chunk.
+• Each chunk is retried up to 3 times before the upload gives up.
+
+Worth knowing
+• The description also promises a cancel button, but this PR doesn't add one.
+
+6 files · +210 −40 · mostly tests
+```
+
+- **Shape:** one sentence that says what's different after the PR, then 2 to 4 short bullets, and at most 2 points worth knowing: a behaviour change, something removed, a risk, or where the description and the code disagree. About 100 words at most; a tiny PR gets only the first line.
+- **Left out:** file and function names, logs, test counts, ticket numbers, links, and any judgement of quality. That's the review's job.
+- **The code wins:** when the description says something the code doesn't do, the summary describes the code and says so.
+- **Size line:** counted from the diff, not written by the model.
+- **Afterwards:** **Review it now**, **Back to the list**, or **Done** (the watch app has no Done; its list is always there).
+- **Never posted.** It's saved as `1430-summary.md` next to the review files. Not in a terminal, `--summary` also prints it to stdout.
+
 ### Output
 
 Each run writes four files to `reviews/<date>/<repo>-PR<number>/`, prefixed with the start time (`1430-…`, then `1430b-…` for a second run in the same minute):
@@ -294,6 +321,7 @@ Each run writes four files to `reviews/<date>/<repo>-PR<number>/`, prefixed with
 | `1430-ponytail-review.md`, `1430-code-review.md` | The raw reviews |
 | `1430-verified.md` | Every finding with status, priority, `file:line` evidence and fix |
 | `1430-digest.md` | The PR comment |
+| `1430-summary.md` | A [PR summary](#pr-summary), when you asked for one (its own run, never posted) |
 
 Example digest (fictional):
 

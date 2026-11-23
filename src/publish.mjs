@@ -62,7 +62,7 @@ export function runHeader({ pr, title, head, model, checkModel, usage }, c = pal
 
 // The menus use the same arrow-key picker as the PR selector. Returns the
 // chosen value; cancelling (q, Esc) returns `fallback`.
-async function choose(pick, title, choices, fallback) {
+export async function choose(pick, title, choices, fallback) {
   const initial = Math.max(0, choices.findIndex((choice) => choice.isDefault));
   const index = await pick(title, choices.map((choice) => choice.label), initial);
   return index === null ? fallback : choices[index].value;

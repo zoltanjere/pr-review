@@ -408,6 +408,21 @@ Each entry has three parts:
   - **Cost:** two sessions plus a small verify, against two reviewer sessions plus verify.
 - **Don't:** Follow up across a rebase by matching moved code (range-diff). It's much harder to get right; the clear fallback covers it.
 
+### 7.6 PR summary before a review
+- **Decision:** after you pick a PR, a menu offers Review it (the default), Summarise it first, or Back. The summary is one session on the check model, in the same temporary checkout as a review, saved as `<id>-summary.md` and never posted (`src/summary.mjs`).
+  - **Shape:** a standalone first sentence (at most 25 words), 2 to 4 "What changes" bullets (at most 20 words each), at most 2 "Worth knowing" points, about 100 words in total. The size line (files, lines, "mostly tests" or "mostly docs" above 60% of changed lines) is computed in code.
+  - **Reader:** a developer on the team who doesn't know this part of the code. Plain, not childish.
+  - **Rules in the prompt:** active voice, present tense; what it does, not how it's built (no code names unless the name is the change); no evidence, no judgement, no filler; one name per thing; the code wins over the description, and a disagreement goes under Worth knowing; no guessed reasons. The prompt carries one fictional good example and one bad one.
+  - **Enter, Enter reviews as before,** and `f` still starts a full review without the menu. Not in a terminal there's no menu: `--summary` prints the summary, otherwise it reviews.
+- **Why:**
+  - **PR descriptions are written for the record,** with logs, checklists and file lists. Before deciding to review you want to know what changes and why, in one read.
+  - **Sources:** Google's CL description guide (a first line that stands alone and says what the change does; "Fix bug" and "Phase 1" are its bad examples), Keep a Changelog ("for humans, not machines"; always mention removals), Linear's changelog (one plain sentence of 9 to 20 words per change, from the affected person's side), plain-language guides (active voice, present tense, no filler), and a 2026 study of PR descriptions (readers value purpose and reason most, code explanation less). Tools like Copilot and CodeRabbit write file-by-file lists for the GitHub description, which is the opposite of the goal here.
+  - **It reads the code, not just the description,** because descriptions drift from what the code does, and that gap is useful to know before a review.
+  - **The full checkout, not just `gh pr diff`:** the model can open whole files to see what a change does, and it reuses the tested prepare path with its read-only rules and cleanup.
+  - **The check model:** one short text needs no reviewer-grade model.
+  - **Never posted:** it's for you, to decide; the PR already has its author's description.
+- **Don't:** Ask for a fixed word count the run fails on. A long summary is shown with a note instead.
+
 ## 8. Evaluation
 
 ### 8.1 How changes are judged

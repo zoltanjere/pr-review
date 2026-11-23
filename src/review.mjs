@@ -2,19 +2,20 @@
 // First: switch to the project's pinned Node if this one is older (.nvmrc).
 import './node-version.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { createAdapters, readConfig, REVIEWERS } from './adapters.mjs';
-import { choosePr } from './select.mjs';
-import { plainReporter, toReporter } from './ui.mjs';
+import { choosePr, pickFromList } from './select.mjs';
+import { palette, plainReporter, toReporter } from './ui.mjs';
 import { createRouter, isLive, runSteps } from './steps.mjs';
-import { printSummary } from './confirm.mjs';
-import { publishInTerminal } from './publish.mjs';
+import { costTotal, printSummary } from './confirm.mjs';
+import { choose, publishInTerminal } from './publish.mjs';
 import { watchCommand } from './watch-run.mjs';
+import { diffStats, formatSummary, renderSummary, SUMMARY_WORD_LIMIT, summaryWords } from './summary.mjs';
 import { followUpDigest, followUpLine, formatFollowUp, statusSummary, withNotice } from './follow-up.mjs';
 
-const STAGES = [...REVIEWERS, 'follow-up', 'scan', 'verified', 'digest'].join('|');
+const STAGES = [...REVIEWERS, 'follow-up', 'scan', 'verified', 'digest', 'summary'].join('|');
 
 export function parsePrUrl(input) {
   const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)\/?$/.exec(input ?? '');
@@ -62,6 +63,37 @@ async function reserveRun(directory, date) {
   throw new Error(`Too many runs started in the same minute in ${directory}`);
 }
 
+// Removes the temporary checkout and the run's lock, then throws the run's
+// error, a cleanup error, or both.
+async function finishRun({ checkout, reservation, error, options }) {
+  const cleanupErrors = [];
+  if (checkout) {
+    try {
+      await runSteps([{ title: 'removing temporary checkout', run: () => checkout.cleanup() }], options);
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+  }
+  if (reservation) {
+    try {
+      await unlink(reservation.lock);
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+  }
+  if (cleanupErrors.length) {
+    const errors = error ? [error, ...cleanupErrors] : cleanupErrors;
+    throw new AggregateError(errors, `${error ? `${error.message}; ` : ''}cleanup failed: ${cleanupErrors.map((item) => item.message).join('; ')}`);
+  }
+  if (error) throw error;
+}
+
+// reviews/<day>/<repo>-PR<n>: every run of one PR on one day, summaries included.
+function runDirectory(root, pr, date) {
+  const day = [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
+  return join(root, day, `${pr.repo}-PR${pr.number}`);
+}
+
 const words = (text) => String(text).split(/\s+/).filter(Boolean).length;
 
 // Runs the review and saves every stage, the digest included. Posting is a
@@ -73,8 +105,7 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
   const reporter = toReporter(progress);
   const pr = parsePrUrl(url);
   const date = now;
-  const day = [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
-  const directory = join(root, day, `${pr.repo}-PR${pr.number}`);
+  const directory = runDirectory(root, pr, date);
   const saved = [];
   let reservation;
   const save = async (stage, text) => {
@@ -217,26 +248,7 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
   } finally {
     router?.route(null);
   }
-  const cleanupErrors = [];
-  if (checkout) {
-    try {
-      await runSteps([{ title: 'removing temporary checkout', run: () => checkout.cleanup() }], options);
-    } catch (error) {
-      cleanupErrors.push(error);
-    }
-  }
-  if (reservation) {
-    try {
-      await unlink(reservation.lock);
-    } catch (error) {
-      cleanupErrors.push(error);
-    }
-  }
-  if (cleanupErrors.length) {
-    const errors = reviewError ? [reviewError, ...cleanupErrors] : cleanupErrors;
-    throw new AggregateError(errors, `${reviewError ? `${reviewError.message}; ` : ''}cleanup failed: ${cleanupErrors.map((error) => error.message).join('; ')}`);
-  }
-  if (reviewError) throw reviewError;
+  await finishRun({ checkout, reservation, error: reviewError, options });
   return {
     pr, directory, saved, digest, digestPath: saved.at(-1), head: checkout.head,
     title: checkout.title, model: checkout.model, checkModel: checkout.checkModel,
@@ -245,29 +257,160 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
   };
 }
 
+// The summary (src/summary.mjs): prepare the same checkout as a review, run
+// one session, save <id>-summary.md next to the review files. Never posted.
+export async function runSummary(url, { root, adapters, progress, now = new Date(), live = false, router }) {
+  const reporter = toReporter(progress);
+  const pr = parsePrUrl(url);
+  const directory = runDirectory(root, pr, now);
+  const options = { live, reporter };
+  const use = (ui) => router?.route(ui.reporter);
+  let checkout;
+  let reservation;
+  let summary;
+  let path;
+  let error;
+  try {
+    await runSteps([
+      {
+        title: `Preparing ${pr.owner}/${pr.repo}#${pr.number}`, section: true,
+        run: async (ui) => {
+          use(ui);
+          checkout = await adapters.prepare(pr);
+          reservation = await reserveRun(directory, now);
+        },
+      },
+      {
+        title: 'Summary',
+        steps: [{
+          title: 'writing summary',
+          run: async (ui) => {
+            use(ui);
+            const body = formatSummary(await adapters.summarize());
+            const diffText = checkout.diffText ?? (checkout.diff ? await readFile(checkout.diff, 'utf8') : '');
+            const stats = diffStats(diffText);
+            summary = stats.files ? formatSummary(body, stats) : body;
+            path = join(directory, `${reservation.id}-summary.md`);
+            await writeFile(path, `${summary}\n`, { flag: 'wx', mode: 0o600 });
+            const count = summaryWords(body);
+            return [`${count} words${count > SUMMARY_WORD_LIMIT ? ` (long: over ${SUMMARY_WORD_LIMIT})` : ''}`, adapters.tokensFor?.('writing summary')].filter(Boolean).join(' · ');
+          },
+        }],
+      },
+    ], options);
+  } catch (caught) {
+    error = caught;
+  } finally {
+    router?.route(null);
+  }
+  await finishRun({ checkout, reservation, error, options });
+  return { pr, title: checkout.title, summary, path, usage: adapters.usage?.() ?? [] };
+}
+
 export async function main(args, options = {}) {
-  // The interactive watch returns to its picker after each review.
-  if (args[0] === 'watch') return watchCommand(args.slice(1), { review: (url, choice = {}) => reviewOne(url, { ...options, interactive: true, full: Boolean(choice.full) }), ...options });
+  // The interactive watch returns to its picker after each review or summary.
+  if (args[0] === 'watch') {
+    return watchCommand(args.slice(1), {
+      review: (url, choice = {}) => prAction(url, { ...actionOptions({ ...options, interactive: true }), full: Boolean(choice.full), back: true, done: false }),
+      ...options,
+    });
+  }
   const flags = args.filter((arg) => arg.startsWith('-'));
   const urls = args.filter((arg) => !arg.startsWith('-'));
-  const unknown = flags.filter((flag) => !['-y', '--yes', '--full'].includes(flag));
-  if (urls.length > 1 || unknown.length) throw new Error('Usage: reviewpr [--yes] [--full] [<GitHub PR URL>]\n       reviewpr watch [--once | --install | --uninstall]');
+  const unknown = flags.filter((flag) => !['-y', '--yes', '--full', '--summary'].includes(flag));
+  if (urls.length > 1 || unknown.length) throw new Error(USAGE);
   const yes = flags.some((flag) => flag === '-y' || flag === '--yes');
-  let full = flags.includes('--full');
+  const summary = flags.includes('--summary');
   const interactive = options.interactive ?? Boolean(!yes && process.stdin.isTTY && process.stderr.isTTY);
+  const act = actionOptions({ ...options, interactive });
   let url = urls[0];
-  if (url) parsePrUrl(url);
-  else {
-    // No URL: pick one of the default repository's PRs that still need review.
-    if (!interactive) throw new Error('Pass a PR URL, or run in a terminal without --yes to pick one from defaultRepository.');
-    const config = await readConfig(options.configPath);
-    if (!config.defaultRepository) throw new Error('Pass a PR URL, or set "defaultRepository": "owner/repo" in config.json to pick from its open PRs.');
+  if (url) {
+    parsePrUrl(url);
+    // Not in a terminal there is no menu: review, or only summarise.
+    if (!interactive) return summary ? act.summarize(url) : act.review(url, { full: flags.includes('--full') });
+    await prAction(url, { ...act, full: flags.includes('--full'), start: summary ? 'summary' : 'ask' });
+    return;
+  }
+  // No URL: pick one of the default repository's PRs that still need review.
+  if (!interactive) throw new Error('Pass a PR URL, or run in a terminal without --yes to pick one from defaultRepository.');
+  const config = await readConfig(options.configPath);
+  if (!config.defaultRepository) throw new Error('Pass a PR URL, or set "defaultRepository": "owner/repo" in config.json to pick from its open PRs.');
+  // "Back to the list" after a summary shows the picker again.
+  for (;;) {
+    let full = flags.includes('--full');
     url = await (options.pick ?? choosePr)(config.defaultRepository, createAdapters({ ...options, progress: () => {} }), {
       onPick: (choice) => { full = full || Boolean(choice?.full); },
     });
     if (!url) return;
+    if (await prAction(url, { ...act, full, back: true, start: summary ? 'summary' : 'ask' }) !== 'back') return;
   }
-  return reviewOne(url, { ...options, interactive, full });
+}
+
+const USAGE = 'Usage: reviewpr [--yes] [--full] [--summary] [<GitHub PR URL>]\n       reviewpr watch [--once | --install | --uninstall]';
+
+// What reviewing and summarising one PR need, for prAction.
+function actionOptions(options) {
+  return {
+    menu: options.menu,
+    output: options.menuOutput,
+    review: (url, { full = false } = {}) => reviewOne(url, { ...options, full }),
+    summarize: (url) => summaryOne(url, options),
+  };
+}
+
+// The step between picking a PR and reviewing it: review it (the default),
+// summarise it first, or go back. `f` in the picker (`full`) goes straight
+// to a full review. Returns 'back' to show the list again, otherwise 'done'.
+// `back`: a list to return to; `done`: offer Done after a summary (the watch
+// app has no Done, since its list is always there).
+export async function prAction(url, { full = false, back = false, done = true, start = 'ask', menu, output = process.stderr, review, summarize }) {
+  const pr = parsePrUrl(url);
+  const name = `${pr.owner}/${pr.repo}#${pr.number}`;
+  const pick = menu ?? ((title, rows, initial) => pickFromList(title, rows, { output, initial, hint: `Enter choose · q ${back ? 'back' : 'cancel'}` }));
+  if (!full) {
+    const first = start === 'summary' ? 'summary' : await choose(pick, `${name}: what next?`, [
+      { label: 'Review it', value: 'review', isDefault: true },
+      { label: 'Summarise it first', value: 'summary' },
+      back ? { label: 'Back to the list', value: 'back' } : { label: 'Cancel', value: 'cancel' },
+    ], back ? 'back' : 'cancel');
+    if (first === 'back') return 'back';
+    if (first === 'cancel') return 'done';
+    if (first === 'summary') {
+      try {
+        await summarize(url);
+      } catch (error) {
+        output.write(`${error.message}\n`);
+      }
+      const next = await choose(pick, `${name}: what next?`, [
+        { label: 'Review it now', value: 'review', isDefault: true },
+        back && { label: 'Back to the list', value: 'back' },
+        (done || !back) && { label: 'Done', value: 'done' },
+      ].filter(Boolean), back ? 'back' : 'done');
+      if (next !== 'review') return next;
+    }
+  }
+  await review(url, { full });
+  return 'done';
+}
+
+// One summary of one PR, shown in the terminal. Not in a terminal, the
+// summary also goes to stdout. Nothing is posted.
+export async function summaryOne(url, options = {}) {
+  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const live = !options.progress && isLive();
+  const reporter = options.progress ? toReporter(options.progress) : plainReporter();
+  const router = live ? createRouter(reporter) : null;
+  const adapters = createAdapters({ ...options, progress: router ?? reporter });
+  const result = await runSummary(url, { root: options.outputRoot ?? join(projectRoot, 'reviews'), adapters, progress: reporter, live, router });
+  const output = options.menuOutput ?? process.stderr;
+  const c = palette(!process.env.NO_COLOR && output.isTTY);
+  const { owner, repo, number } = result.pr;
+  const head = `── Summary · ${owner}/${repo}#${number}${result.title ? ` · ${result.title}` : ''} `;
+  const width = Math.min(output.columns || 80, 100);
+  output.write(['', c.dim(`${head}${'─'.repeat(Math.max(4, width - head.length))}`), '', ...renderSummary(result.summary, c), '',
+    c.dim([`Saved in ${relative(process.cwd(), result.path)}`, costTotal(result.usage)].filter(Boolean).join(' · ')), c.dim('Nothing was posted to GitHub.'), ''].join('\n') + '\n');
+  if (!options.interactive && !process.stdout.isTTY) process.stdout.write(`${result.summary}\n`);
+  return result;
 }
 
 // One review of one PR: run the pipeline, show the summary, then offer to

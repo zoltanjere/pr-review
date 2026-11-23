@@ -10,6 +10,7 @@ import { formatTokens, formatUsage, short, toReporter } from './ui.mjs';
 import { withVerdict } from './verdict.mjs';
 import { linkify } from './links.mjs';
 import { ancestry, checkStatuses, followUpMode, sameChanges } from './follow-up.mjs';
+import { summaryPrompt } from './summary.mjs';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -935,6 +936,11 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
     async scan(plan) {
       if (!session) throw new Error('No prepared review workspace');
       return agent(scanPrompt(plan.findings, plan), undefined, (response) => response, 'scanning new commits');
+    },
+    // The plain-language summary (src/summary.mjs): one session on the check model.
+    async summarize() {
+      if (!session) throw new Error('No prepared review workspace');
+      return agent(summaryPrompt({ ...session, shell: SHELL_NOTE }), undefined, (response) => response, 'writing summary', session.checkModel);
     },
     // file:line references become GitHub links, as in the digest.
     async linkify(text) {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const cli = fileURLToPath(new URL('../src/review.mjs', import.meta.url));
@@ -358,4 +358,119 @@ test('--full reaches the plan, and a full review says why before the reviewers s
   assert(said >= 0 && said < order.indexOf('ponytail-review'));
   assert.equal(result.followUp, null);
   assert.equal(result.digest, '**Verdict:** ✅ Ship. No issues found.');
+});
+
+// The step between picking a PR and reviewing it.
+function menuRun(answers) {
+  const asked = [];
+  const calls = [];
+  const menu = async (title, rows, initial) => {
+    asked.push({ title, rows, initial });
+    const answer = answers.shift();
+    return answer === undefined ? null : rows.findIndex((row) => row.startsWith(answer));
+  };
+  const options = {
+    menu,
+    output: { write: (text) => calls.push(['output', text]) },
+    review: async (url, choice) => { calls.push(['review', url, choice]); },
+    summarize: async (url) => { calls.push(['summarize', url]); },
+  };
+  return { asked, calls, options };
+}
+const URL42 = 'https://github.com/acme/widget/pull/42';
+
+test('after a pick, Enter reviews as before: Review it is the default', async () => {
+  const { prAction } = await import('../src/review.mjs');
+  const run = menuRun(['Review it']);
+  assert.equal(await prAction(URL42, { ...run.options, back: true }), 'done');
+  assert.equal(run.asked[0].title, 'acme/widget#42: what next?');
+  assert.deepEqual(run.asked[0].rows, ['Review it', 'Summarise it first', 'Back to the list']);
+  assert.equal(run.asked[0].initial, 0);
+  assert.deepEqual(run.calls, [['review', URL42, { full: false }]]);
+});
+
+test('Summarise it first, then Review it now, runs the summary and then the review', async () => {
+  const { prAction } = await import('../src/review.mjs');
+  const run = menuRun(['Summarise', 'Review it now']);
+  assert.equal(await prAction(URL42, { ...run.options, back: true }), 'done');
+  assert.deepEqual(run.asked[1].rows, ['Review it now', 'Back to the list', 'Done']);
+  assert.deepEqual(run.calls, [['summarize', URL42], ['review', URL42, { full: false }]]);
+});
+
+test('Back to the list after a summary returns back; Done ends; q goes back without reviewing', async () => {
+  const { prAction } = await import('../src/review.mjs');
+  let run = menuRun(['Summarise', 'Back']);
+  assert.equal(await prAction(URL42, { ...run.options, back: true }), 'back');
+  run = menuRun(['Summarise', 'Done']);
+  assert.equal(await prAction(URL42, { ...run.options, back: true }), 'done');
+  run = menuRun([]);
+  assert.equal(await prAction(URL42, { ...run.options, back: true }), 'back');
+  assert.deepEqual(run.calls, []);
+});
+
+test('the watch app offers no Done, and a URL with no list offers Cancel and Done instead of Back', async () => {
+  const { prAction } = await import('../src/review.mjs');
+  let run = menuRun(['Summarise', 'Back']);
+  await prAction(URL42, { ...run.options, back: true, done: false });
+  assert.deepEqual(run.asked[1].rows, ['Review it now', 'Back to the list']);
+  run = menuRun(['Cancel']);
+  assert.equal(await prAction(URL42, run.options), 'done');
+  assert.deepEqual(run.asked[0].rows, ['Review it', 'Summarise it first', 'Cancel']);
+  run = menuRun(['Summarise', 'Done']);
+  await prAction(URL42, run.options);
+  assert.deepEqual(run.asked[1].rows, ['Review it now', 'Done']);
+});
+
+test('f (full review) skips the menu; --summary skips the first question', async () => {
+  const { prAction } = await import('../src/review.mjs');
+  let run = menuRun([]);
+  await prAction(URL42, { ...run.options, full: true, back: true });
+  assert.deepEqual(run.asked, []);
+  assert.deepEqual(run.calls, [['review', URL42, { full: true }]]);
+  run = menuRun(['Done']);
+  await prAction(URL42, { ...run.options, start: 'summary' });
+  assert.equal(run.asked.length, 1);
+  assert.deepEqual(run.calls, [['summarize', URL42]]);
+});
+
+test('a failed summary is shown and the menu still offers the review', async () => {
+  const { prAction } = await import('../src/review.mjs');
+  const run = menuRun(['Summarise', 'Review it now']);
+  await prAction(URL42, { ...run.options, summarize: async () => { throw new Error('copilot failed'); } });
+  assert.deepEqual(run.calls, [['output', 'copilot failed\n'], ['review', URL42, { full: false }]]);
+});
+
+test('Back to the list shows the picker again in reviewpr with no URL', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pr-review-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const configPath = join(root, 'config.json');
+  await writeFile(configPath, JSON.stringify({ model: 'claude-sonnet-5.5', defaultRepository: 'acme/widget' }));
+  const { main } = await import('../src/review.mjs');
+  const picks = [URL42, null];
+  let shown = 0;
+  await main([], {
+    configPath, interactive: true,
+    pick: async () => { shown += 1; return picks.shift(); },
+    menu: async (title, rows) => rows.indexOf('Back to the list'),
+  });
+  assert.equal(shown, 2);
+});
+
+test('runSummary saves the summary with its size line, cleans up, and runs no review', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pr-review-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { runSummary } = await import('../src/review.mjs');
+  const calls = [];
+  const adapters = {
+    prepare: async () => ({ checkout: 'fixture', title: 'fix: resume uploads', diffText: 'diff --git a/src/a.js b/src/a.js\n--- a/src/a.js\n+++ b/src/a.js\n@@ -1 +1 @@\n-a\n+b', cleanup: async () => { calls.push('cleanup'); } }),
+    summarize: async () => { calls.push('summarize'); return 'Summary:\nUploads now resume after a dropped connection.'; },
+    review: async () => { calls.push('review'); return ''; },
+  };
+  const result = await runSummary(URL42, { root, adapters, now: NOW, progress: () => {} });
+  assert.deepEqual(calls, ['summarize', 'cleanup']);
+  assert.equal(result.summary, 'Uploads now resume after a dropped connection.\n\n_1 file · +1 −1_');
+  assert.equal(result.title, 'fix: resume uploads');
+  assert.match(result.path, /widget-PR42\/1430-summary\.md$/);
+  assert.equal(await readFile(result.path, 'utf8'), `${result.summary}\n`);
+  assert.deepEqual((await readdir(dirname(result.path))).sort(), ['1430-summary.md']);
 });

@@ -2,6 +2,12 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.11.0 (2026-11-23)
+
+- **Summarise a PR before reviewing it:** after you pick a PR (in `reviewpr` and `reviewpr watch`), a menu offers **Review it** (the default, so Enter twice works as before), **Summarise it first**, or **Back to the list**. The summary is a short, plain description of what the PR does, written by one check-model session from the description and the code: one standalone sentence, a few "What changes" bullets, and "Worth knowing" points such as where the description and the code disagree. It's saved as `<id>-summary.md` and never posted. Afterwards: Review it now, Back to the list, or Done.
+- **`--summary`:** summarise a PR from the command line; not in a terminal, it prints the summary to stdout.
+- **`f` in the picker** still starts a full review straight away, without the menu.
+
 ## 0.10.0 (2026-11-23)
 
 - **Rebases don't look like fixes:** after your review, a PR that was only rebased or had the base branch merged in, with its own changes exactly as reviewed, moves to "No new changes since your review" (`rebased only`, `merged main only`) instead of Fixes pushed, and watch doesn't notify. A follow-up on it checks your points against the replies instead of falling back to a full review.

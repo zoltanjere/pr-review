@@ -694,3 +694,32 @@ test('watch reads open PRs with mergeable, and a departed PR outcome with one re
   });
   assert.deepEqual(calls[1], ['gh', 'pr', 'view', '7', '--repo', 'acme/widget', '--json', 'state,mergedAt,mergedBy,title,author,url']);
 });
+
+test('--summary runs one session on the check model, saves the summary, posts nothing and removes the checkout', async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.config, JSON.stringify({ model: MODEL, checkModel: 'claude-haiku-5.5' }));
+  const output = join(f.root, 'reviews');
+  const temp = join(f.root, 'tmp');
+  await mkdir(temp);
+  const sessions = [];
+  const copilot = (args) => {
+    const model = args[args.indexOf('--model') + 1];
+    sessions.push({ prompt: promptOf(args), model, tools: args.filter((arg) => arg.startsWith('--deny-tool')) });
+    return jsonl([message('Here is the summary:\nThe example file now says after instead of before.', model)]);
+  };
+  const { main } = await import('../src/review.mjs');
+  await main(['https://github.com/acme/widget/pull/42', '--summary'], {
+    projectsRoot: f.root, configPath: f.config, outputRoot: output, tempRoot: temp, progress: () => {}, interactive: false,
+    menuOutput: { write: () => {} }, execute: mockExecute(f, { copilot }),
+  });
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].model, 'claude-haiku-5.5');
+  assert.match(sessions[0].prompt, /^Summarise the pull request/);
+  assert(sessions[0].tools.includes('--deny-tool=write'));
+  const [day] = await readdir(output);
+  const dir = join(output, day, 'widget-PR42');
+  const files = await readdir(dir);
+  assert.deepEqual(files.map((file) => file.replace(/^\d{4}-/, '')), ['summary.md']);
+  assert.equal(await readFile(join(dir, files[0]), 'utf8'), 'The example file now says after instead of before.\n\n_1 file · +1 −1_\n');
+  assert.deepEqual(await readdir(temp), []);
+});

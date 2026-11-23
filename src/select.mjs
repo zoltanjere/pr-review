@@ -443,7 +443,7 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
   const first = build(null);
   const picked = await pickFromList(first.title, first.rows, {
     input, output, initial: first.index, actions, control, onMove: watch ? onMove : undefined, status: watch?.status,
-    hint: `Enter review · f full review · s skip until it changes · a show skipped${watch ? ' · r refresh' : ''} · q ${watch ? 'quit' : 'cancel'}`,
+    hint: `Enter review or summary · f full review · s skip until it changes · a show skipped${watch ? ' · r refresh' : ''} · q ${watch ? 'quit' : 'cancel'}`,
   }).finally(() => unsubscribe?.());
   if (picked === null || !view.map[picked]) {
     output.write(watch ? 'Watch stopped.\n' : 'Nothing selected.\n');

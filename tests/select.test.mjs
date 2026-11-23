@@ -143,7 +143,7 @@ test('f picks the highlighted PR for a full review; Enter leaves the choice to t
     term.press(...keys);
     assert.match(await url, /^https:\/\/github\.com\/acme\/widget\/pull\/4[23]$/);
     assert.deepEqual(choice, { full });
-    assert.match(term.text(), /Enter review · f full review · s skip/);
+    assert.match(term.text(), /Enter review or summary · f full review · s skip/);
   }
 });
 

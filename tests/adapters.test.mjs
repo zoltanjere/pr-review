@@ -539,6 +539,8 @@ test('references in the PR body to other PRs and issues are found, without self,
     ['acme/widget#9', 'acme/tools#163', 'acme/widget#12']);
   // A later bare #163 is shorthand for the explicit acme/tools#163, not this repo's #163.
   assert.deepEqual(prReferences('Needs acme/tools#163. Once #163 merges, move the pin.', PR).map((ref) => `${ref.owner}/${ref.repo}#${ref.number}`), ['acme/tools#163']);
+  // A crafted body can't steer the lookup to another API path.
+  assert.deepEqual(prReferences('See ../..#1 and https://github.com/../../pull/2', PR), []);
   const many = Array.from({ length: 9 }, (_, i) => `#${i + 100}`).join(' ');
   assert.equal(prReferences(many, PR).length, 5);
 });

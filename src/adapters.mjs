@@ -91,6 +91,8 @@ export function prReferences(text, pr, { exclude = [] } = {}) {
   const found = new Map();
   const add = (owner, repo, number) => {
     const n = Number(number);
+    // A name made only of dots would turn the API path into ../ (GitHub names never are).
+    if ([owner, repo].some((name) => /^\.+$/.test(name))) return;
     const same = owner.toLowerCase() === pr.owner.toLowerCase() && repo.toLowerCase() === pr.repo.toLowerCase();
     if (!Number.isSafeInteger(n) || n < 1 || (same && (n === Number(pr.number) || exclude.map(Number).includes(n)))) return;
     const key = `${owner}/${repo}#${n}`.toLowerCase();

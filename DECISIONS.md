@@ -73,7 +73,7 @@ Each entry has three parts:
 - **Decision:** `prepare()` fetches these into `pr-context.json`:
   - the linked GitHub issues (`closingIssuesReferences`, via `gh issue view`)
   - the Azure Boards work items referenced as `AB#<id>` in the title, body or commits (via `az boards work-item show`)
-  - the PR's own `isDraft`, and the current state of up to 5 other PRs or issues the title or body names (`#163`, `owner/repo#163` or a github.com URL), via one read-only `gh api repos/<owner>/<repo>/issues/<n>` call each: open or closed, merged when, draft. A bare `#N` after an explicit `owner/repo#N` with the same number is read as shorthand for it. A failed lookup is recorded with its error.
+  - the PR's own `isDraft`, and the current state of up to 5 other PRs or issues the title or body names (`#163`, `owner/repo#163` or a github.com URL), via one read-only `gh api repos/<owner>/<repo>/issues/<n>` call each: open or closed, merged when, draft. A bare `#N` after an explicit `owner/repo#N` with the same number is read as shorthand for it. Owner or repo names made only of dots are ignored, so a crafted PR body can't turn the lookup into another API path. A failed lookup is recorded with its error.
 
   Reviewers get an "Issue tracker" note saying these are already fetched. A failed work-item fetch is recorded with its error, and the run continues.
 - **Why:** Copilot shell rules match only the first subcommand. Allowing `gh issue` would also allow `gh issue create`, and the same goes for `az boards`. Pre-fetching keeps agents read-only.

@@ -425,6 +425,7 @@ test('the check prompt makes verify trace a claimed example and skip what the PR
   assert.match(prompts[0], /whether the PR body already states what a finding describes/);
   assert.match(prompts[0], /counts as stated only while that condition is unmet/);
   assert.match(prompts[0], /read the whole section the cited line belongs to/);
+  assert.match(prompts[0], /read your own evidence against the finding/);
 });
 
 test('verify with no findings records that and checks nothing', async (t) => {

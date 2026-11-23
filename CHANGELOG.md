@@ -7,6 +7,7 @@ This project follows [semantic versioning](https://semver.org/). A pipeline or t
 - **Referenced PRs:** preparation records the PR's draft state and the current state of up to 5 PRs or issues its body names (open, closed, merged when), with read-only `gh api` calls.
 - **Conditions in the PR body:** "stays a draft until #163 merges" counts as already stated only while #163 is unmerged. Once it has merged, a finding about the promised step is judged on its own.
 - **Rules in documents:** for a finding about a rule in a document or config file, verify reads the whole section and the rules around it that could override it before confirming.
+- **Self-check:** before confirming, verify reads its own evidence against the finding. A finding whose evidence shows the case is already prevented is Rejected; a misleading example on its own is at most Minor.
 
 ## 0.5.0 (2026-11-23)
 

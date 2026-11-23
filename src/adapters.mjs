@@ -345,6 +345,7 @@ How to check:
 - Tier "B" findings: judge from the diff file; open a file only when the diff cannot settle it.
 - A finding about a rule in a document or configuration file (instructions, a skill, a policy, a config): read the whole section the cited line belongs to, and the other rules in that file that could override or cover it, before confirming. Cite the line that settles it.
 - A finding that claims a specific input gives a specific result ("X makes Y happen"): walk that exact input through every function it passes, in order, and note in the evidence what each step does to it, with file:line (how it is split, normalised, matched, guarded). Confirm only if every step agrees. If a step contradicts the example, give an input that does trigger the problem, or reject the finding if none does; if you cannot follow a step, answer Question.
+- Before you confirm, read your own evidence against the finding. If it shows a condition, guard or rule that already prevents the stated case, the finding is Rejected, even when an example or wording nearby looks inconsistent with it; a misleading example on its own is at most Minor.
 The reviewers' claim is not evidence.
 
 Decide for each:

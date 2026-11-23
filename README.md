@@ -125,7 +125,7 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
 brew install terminal-notifier   # clicking a notification opens the PR; without it, notifications can't be clicked
 ```
 
-**Pick the events in `config.json`.** Without a `watch` block, you get `new` and `fixes-after-changes`.
+**Pick the events in `config.json`.** Without a `watch` block, you get every event, as with `"events": ["all"]`. `config.example.json` lists all of them, so you can copy it and delete the ones you don't want:
 
 ```json
 "watch": { "events": ["new", "fixes-after-changes", "merged-reviewed"], "intervalMinutes": 5 }
@@ -141,6 +141,7 @@ brew install terminal-notifier   # clicking a notification opens the PR; without
 | `review-requested` | you're asked to review, or asked again |
 | `my-pr-reviewed` | someone approves, requests changes on or comments on one of your PRs |
 | `my-pr-conflicts` | one of your PRs starts having merge conflicts |
+| `all` | every event above |
 
 One change gives one notification, even when it matches several events. A misspelled event name stops `watch` with the list of valid names. The first check only records what's already open, so you don't get a burst of notifications for old PRs.
 

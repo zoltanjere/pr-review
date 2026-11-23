@@ -358,7 +358,7 @@ Each entry has three parts:
 - **Don't:** Hide a PR because its reviewed commit is unknown.
 
 ### 7.4 Watch: notify when a PR needs you
-- **Decision:** `reviewpr watch` polls the default repository with the picker's own scan (`scanRepo`) and sends macOS notifications for the events listed in `config.json` (`watch.events`, see the README table). It has two modes that share one poll (`pollOnce`):
+- **Decision:** `reviewpr watch` polls the default repository with the picker's own scan (`scanRepo`) and sends macOS notifications for the events listed in `config.json` (`watch.events`, see the README table; `all`, the default, means every event). It has two modes that share one poll (`pollOnce`):
   - `watch --once`, run by a launchd agent (`watch --install`) every `intervalMinutes` (default 5, minimum 2);
   - `watch`, the picker kept open: it refreshes in place, and Enter reviews in the same terminal and returns to the list (`reviewOne`).
   - **Events:** `watchEvents` is a pure function of the scan and the memory in `state/watch.json`.
@@ -374,7 +374,8 @@ Each entry has three parts:
   - **Polling, not webhooks or Actions:** both of those need writes or admin rights on the repository being reviewed, and the tool only reads it. GitHub's notifications API doesn't reliably report new commits on a PR you reviewed, which is the main event.
   - **No model:** the picker already knows every state, so notifying costs nothing.
   - **Notifications never act:** they open the PR and nothing more. A review starts only from the picker, and posting still needs the two confirmations (5.4).
-  - **Request changes blocks the author** until you look again. Approving doesn't, which is why `fixes-after-changes` is on by default and `reviewed-updated` is optional.
+  - **Every event by default (`all`):** it's easier to try everything and remove what's noisy than to copy each name from the README. `config.example.json` lists every event for the same reason.
+  - **Request changes blocks the author** until you look again. Approving doesn't, which is why `fixes-after-changes` exists on its own next to `reviewed-updated`.
 - **Don't:** Send PR titles to a third-party push service. They are the reviewed repository's data.
 
 ## 8. Evaluation

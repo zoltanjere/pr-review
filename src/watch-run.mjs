@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createAdapters, readConfig } from './adapters.mjs';
 import { isSkipped, loadJson, loadState, saveJson } from './picker-state.mjs';
 import { age, choosePr, scanRepo } from './select.mjs';
-import { departed, notify as showNotification, watchConfig, watchEvents } from './watch.mjs';
+import { WATCH_EVENTS, departed, notify as showNotification, watchConfig, watchEvents } from './watch.mjs';
 
 // Running watch: one poll (shared by the launchd mode and the interactive
 // app), the lock that stops both from notifying twice, the log, and the
@@ -182,7 +182,7 @@ export async function watchCommand(args, options = {}) {
   const paths = options.paths ?? PATHS;
   if (mode === '--install') {
     const file = await installAgent({ intervalMinutes, dir: options.agentDir, paths, exec: options.exec, node: options.node, path: options.path });
-    output.write(`Background watch installed: checks ${config.defaultRepository} every ${intervalMinutes} min for ${events.join(', ')}.\n`
+    output.write(`Background watch installed: checks ${config.defaultRepository} every ${intervalMinutes} min for ${events.length === WATCH_EVENTS.length ? 'all events' : events.join(', ')}.\n`
       + `  Agent: ${file}\n  Log:   ${paths.log}\n`
       + '  After changing "watch" in config.json, run reviewpr watch --install again. Remove it with reviewpr watch --uninstall.\n');
     const notifier = await (options.exec ?? run)('/usr/bin/which', ['terminal-notifier']).then(() => true, () => false);

@@ -200,7 +200,7 @@ test('Enter reviews in the same terminal and comes back to a fresh list; merges 
 test('a second app is refused while one holds a live lock; an empty list keeps the app open', async (t) => {
   const run = await app(t, [[]]);
   await until(() => run.term.text().includes('0 to review'));
-  await assert.rejects(runApp(REPO, {}, { events: ['new'], intervalMinutes: 5, paths: run.paths }), /already running/);
+  await assert.rejects(runApp(REPO, {}, { events: ['new'], intervalMinutes: 5, paths: run.paths, now: () => NOW }), /already running/);
   run.term.press('q');
   await run.done;
 });

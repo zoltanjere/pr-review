@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { candidatePrs } from '../src/select.mjs';
-import { DEFAULT_EVENTS, WATCH_EVENTS, departed, notify, watchConfig, watchEvents } from '../src/watch.mjs';
+import { WATCH_EVENTS, departed, notify, watchConfig, watchEvents } from '../src/watch.mjs';
 
 const ME = 'me';
 const REPO = 'acme/widget';
@@ -27,9 +27,12 @@ async function polls(first, second, options = {}) {
 }
 
 test('config: default events, unknown names stop with the valid list, interval bounds', () => {
-  assert.deepEqual(watchConfig({}), { events: DEFAULT_EVENTS, intervalMinutes: 5 });
+  // No watch block, or "all": every event.
+  assert.deepEqual(watchConfig({}), { events: WATCH_EVENTS, intervalMinutes: 5 });
+  assert.deepEqual(watchConfig({ watch: { events: ['all'] } }).events, WATCH_EVENTS);
+  assert.deepEqual(watchConfig({ watch: { events: ['new', 'all'] } }).events, WATCH_EVENTS);
   assert.deepEqual(watchConfig({ watch: { events: ['merged', 'new'], intervalMinutes: 3 } }), { events: ['new', 'merged'], intervalMinutes: 3 });
-  assert.throws(() => watchConfig({ watch: { events: ['new', 'fixes'] } }), new RegExp(`Unknown watch event "fixes".*Valid: ${WATCH_EVENTS.join(', ')}`));
+  assert.throws(() => watchConfig({ watch: { events: ['new', 'fixes'] } }), new RegExp(`Unknown watch event "fixes".*Valid: all, ${WATCH_EVENTS.join(', ')}`));
   assert.throws(() => watchConfig({ watch: { events: [] } }), /non-empty list/);
   assert.throws(() => watchConfig({ watch: { intervalMinutes: 1 } }), /at least 2/);
   assert.throws(() => watchConfig({ watch: [] }), /must be an object/);
@@ -55,9 +58,10 @@ test('new: a PR opened, or moved out of draft, notifies once; mine, bots and dra
 test('fixes-after-changes: pushes after my Request changes notify once per head, not after Approve or Comment', async () => {
   const reviewed = [pr(1, { latestReviews: [myReview('CHANGES_REQUESTED')] }), pr(2, { latestReviews: [myReview('APPROVED')] }), pr(3, { latestReviews: [myReview('COMMENTED')] })];
   const pushed = reviewed.map((item) => ({ ...item, headRefOid: NEW }));
-  const { notifications, memory } = await polls(reviewed, pushed);
+  const events = ['fixes-after-changes'];
+  const { notifications, memory } = await polls(reviewed, pushed, { events });
   assert.deepEqual(notifications.map((n) => [n.number, n.events, n.text]), [[1, ['fixes-after-changes'], '⟳ #1 fixes pushed · 2 new commits']]);
-  assert.deepEqual(watchEvents({ repo: REPO, scan: await scan(pushed), memory, now: NOW }).notifications, []);
+  assert.deepEqual(watchEvents({ repo: REPO, scan: await scan(pushed), memory, events, now: NOW }).notifications, []);
 });
 
 test('reviewed-updated covers every review type, and one push gives one notification with fixes-after-changes on too', async () => {

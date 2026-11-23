@@ -11,7 +11,9 @@ export const WATCH_EVENTS = [
   'new', 'fixes-after-changes', 'reviewed-updated', 'merged-reviewed', 'merged',
   'review-requested', 'my-pr-reviewed', 'my-pr-conflicts',
 ];
-export const DEFAULT_EVENTS = ['new', 'fixes-after-changes'];
+// "all" stands for every event; it's also the default without a watch block.
+export const ALL = 'all';
+export const DEFAULT_EVENTS = [ALL];
 const DEFAULT_INTERVAL = 5;
 const MIN_INTERVAL = 2;
 
@@ -20,12 +22,13 @@ export function watchConfig(config = {}) {
   const watch = config.watch ?? {};
   if (typeof watch !== 'object' || Array.isArray(watch)) throw new Error('config.json "watch" must be an object.');
   const events = watch.events ?? DEFAULT_EVENTS;
-  if (!Array.isArray(events) || !events.length) throw new Error(`config.json "watch.events" must be a non-empty list of: ${WATCH_EVENTS.join(', ')}.`);
-  const unknown = events.filter((name) => !WATCH_EVENTS.includes(name));
-  if (unknown.length) throw new Error(`Unknown watch event${unknown.length === 1 ? '' : 's'} ${unknown.map((name) => `"${name}"`).join(', ')} in config.json. Valid: ${WATCH_EVENTS.join(', ')}.`);
+  const valid = [ALL, ...WATCH_EVENTS].join(', ');
+  if (!Array.isArray(events) || !events.length) throw new Error(`config.json "watch.events" must be a non-empty list of: ${valid}.`);
+  const unknown = events.filter((name) => name !== ALL && !WATCH_EVENTS.includes(name));
+  if (unknown.length) throw new Error(`Unknown watch event${unknown.length === 1 ? '' : 's'} ${unknown.map((name) => `"${name}"`).join(', ')} in config.json. Valid: ${valid}.`);
   const interval = watch.intervalMinutes ?? DEFAULT_INTERVAL;
   if (!Number.isFinite(interval) || interval < MIN_INTERVAL) throw new Error(`config.json "watch.intervalMinutes" must be a number of at least ${MIN_INTERVAL}.`);
-  return { events: WATCH_EVENTS.filter((name) => events.includes(name)), intervalMinutes: interval };
+  return { events: WATCH_EVENTS.filter((name) => events.includes(ALL) || events.includes(name)), intervalMinutes: interval };
 }
 
 const prKey = (repo, number) => `${repo}#${number}`;
@@ -71,7 +74,7 @@ export function departed(memory, repo, all) {
 //   outcomes: { [number]: prOutcome result } for the departed PRs.
 // The first run for a repository only records, so old PRs don't notify.
 // One notification per PR per poll, naming every event that matched it.
-export function watchEvents({ repo, scan, memory = {}, events = DEFAULT_EVENTS, skipped = () => false, outcomes = {}, now = Date.now() }) {
+export function watchEvents({ repo, scan, memory = {}, events = WATCH_EVENTS, skipped = () => false, outcomes = {}, now = Date.now() }) {
   const on = new Set(events);
   const { viewer, all, list } = scan;
   const before = memory.open ?? {};

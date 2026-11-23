@@ -5,7 +5,13 @@
   "watch": {
     "events": [
       "new",
-      "fixes-after-changes"
+      "fixes-after-changes",
+      "reviewed-updated",
+      "merged-reviewed",
+      "merged",
+      "review-requested",
+      "my-pr-reviewed",
+      "my-pr-conflicts"
     ],
     "intervalMinutes": 5
   }

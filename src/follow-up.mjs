@@ -148,27 +148,36 @@ function newSection(body, start) {
   return { visible: numbered, details };
 }
 
-// The notice to the PR author, under the verdict: what was re-reviewed and
-// what wasn't. Written from templates so it always matches what ran.
-export function reReviewNotice({ old, head, commits, total, chained = false, merged = null, counts }) {
-  const since = `${chained ? 'the follow-up' : 'the review'} at ${at(old)}`;
-  const points = `${plural(total, 'point')} ${chained ? 'still open' : 'raised'} last time`;
-  const lines = [
-    `🔁 **Re-review of the changes since ${since}**${commits ? ` (${plural(commits, 'new commit')}, ${at(old)} → ${at(head)})` : ''}.`,
-    commits
-      ? `This review only checks the ${points}, whether ${total === 1 ? 'it' : 'each'} was fixed or answered, and whether the ${plural(commits, 'new commit')} introduce${commits === 1 ? 's' : ''} a new problem. The rest of the PR wasn't reviewed again, and points from last time aren't re-raised in new words.`
-      : `This review only checks the replies to the ${points}; there are no new commits since then. The rest of the PR wasn't reviewed again.`,
-  ];
-  if (merged) lines.push(`Changes merged in from \`${merged}\` weren't reviewed.`);
+// The notice to the PR author, under the verdict: two short lines saying it's
+// a re-review, its scope, and the counts. Written from templates so it always
+// matches what ran.
+export function reReviewNotice({ old, commits, total, chained = false, merged = null, counts }) {
+  const since = `${chained ? 'the follow-up at ' : ''}${at(old)}`;
+  const points = `${total} earlier point${total === 1 ? '' : 's'}${chained ? ' still open' : ''}`;
+  const scope = commits
+    ? `(${plural(commits, 'new commit')}): only the ${points} and what the new ${commits === 1 ? 'commit' : 'commits'} changed were checked.`
+    : `(no new commits): only the replies to the ${points} were checked.`;
   const parts = [
     counts.fixed && `${counts.fixed} fixed`,
     counts.answered && `${counts.answered} answered`,
     counts.open && `${counts.open} still open`,
     counts.added && `${counts.added} new`,
+    commits && !counts.added ? 'nothing new' : null,
   ].filter(Boolean);
-  const tail = commits && !counts.added ? 'no new problems in the new commits' : null;
-  lines.push(`Result: ${[...parts, tail].filter(Boolean).join(', ') || 'nothing to report'}.`);
-  return lines.map((line) => `> ${line}`).join('\n');
+  return [
+    `🔁 **Re-review since ${since}** ${scope}${merged ? ` Changes merged in from \`${merged}\` weren't reviewed.` : ''}`,
+    `${parts.join(', ') || 'Nothing to report'}.`,
+  ].map((line) => `> ${line}`).join('\n');
+}
+
+// A resolved point needs no explanation: its title, cut at a word, with a
+// code span never left open. The evidence stays in the saved follow-up stage.
+export function shortTitle(title, max = 80) {
+  const flat = String(title ?? '').replace(/\s+/g, ' ').trim().replace(/[.:?]$/, '');
+  if (flat.length <= max) return flat;
+  let cut = flat.slice(0, max).replace(/\s+\S*$/, '');
+  if ((cut.match(/`/g) ?? []).length % 2) cut = cut.replace(/\s*`[^`]*$/, '');
+  return `${cut} …`;
 }
 
 // The whole follow-up digest: verdict, notice, still open, new, resolved.
@@ -215,10 +224,7 @@ export function followUpDigest({ previous, statuses, newBody = '', newFindings =
   if (done.length) {
     const summary = [counts.fixed && `${counts.fixed} fixed`, counts.answered && `${counts.answered} answered`].filter(Boolean).join(', ');
     sections.push([`<details><summary>Resolved since the last review: ${summary}</summary>`, '',
-      ...done.map(({ finding, status }) => {
-        const title = finding.title.replace(/[.:]$/, '');
-        return status.status === 'Fixed' ? `- ✅ **Fixed:** ${title}: ${status.evidence}` : `- 💬 **Answered:** ${title}: ${quote(status.reply)} ${status.evidence}`;
-      }),
+      ...done.map(({ finding, status }) => `- ${status.status === 'Fixed' ? '✅' : '💬'} ${shortTitle(finding.title)}`),
       '</details>'].join('\n'));
   }
   if (fresh.details) sections.push(fresh.details);

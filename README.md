@@ -252,16 +252,18 @@ digest  ── verdict, a re-review notice for the author, still open, new, reso
   ```
   **Verdict:** ⚠️ Changes recommended. 1 still open, 1 new.
 
-  > 🔁 **Re-review of the changes since the review at `abc1234`** (2 new commits, `abc1234` → `def5678`).
-  > This review only checks the 4 points raised last time, whether each was fixed or answered, and whether
-  > the 2 new commits introduce a new problem. The rest of the PR wasn't reviewed again, and points from
-  > last time aren't re-raised in new words.
-  > Result: 2 fixed, 1 answered, 1 still open, 1 new.
+  > 🔁 **Re-review since `abc1234`** (2 new commits): only the 4 earlier points and what the new commits changed were checked.
+  > 2 fixed, 1 answered, 1 still open, 1 new.
 
   ### Still open from the last review
   ### New in the fixes
-  <details> Resolved since the last review: 2 fixed, 1 answered </details>
+  <details> Resolved since the last review: 2 fixed, 1 answered
+    - ✅ Retry resends a chunk the server already stored
+    - ✅ Backoff has no upper bound
+    - 💬 The spec says uploads over 5 GB are refused, but `MAX_SIZE` is 50 GB
+  </details>
   ```
+- **Short by design:** resolved points are one line each (✅ fixed, 💬 answered), with no explanation. Only open points carry a reason. The full evidence for every point is in the saved `…-follow-up.md`.
 - **Verdict:** 🔴 when a Must fix is still open, disputed or new; ⚠️ when only Should fix items or questions are open; ✅ when everything is resolved and nothing new came up.
 - **Cost:** two sessions plus a small verify, instead of two full reviewers plus verify.
 - **Chains:** the posted footer reads `Follow-up at def5678 of the review at abc1234`, so the next follow-up checks only what was still open.

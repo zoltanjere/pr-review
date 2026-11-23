@@ -122,7 +122,7 @@ test('followUpLine counts commits and findings', () => {
   assert.equal(followUpLine({ head: 'abc1234', commits: 0, findings: 1 }), 'Follow-up of your review at `abc1234`: no new commits, 1 finding to check.');
 });
 
-const { checkStatuses, followUpDigest, reReviewNotice, resolved, withNotice } = await import('../src/follow-up.mjs');
+const { checkStatuses, followUpDigest, reReviewNotice, resolved, shortTitle, withNotice } = await import('../src/follow-up.mjs');
 const { verdictFromText } = await import('../src/verdict.mjs');
 
 const PREVIOUS = postedFindings(DIGEST + FOOTER).findings;
@@ -151,9 +151,8 @@ test('followUpDigest: still open first, numbered; new findings after; resolved f
   const digest = followUpDigest({ previous: PREVIOUS, statuses, newBody, newFindings, facts: FACTS });
   assert.equal(digest, `**Verdict:** ⚠️ Changes recommended. 1 still open, 1 new.
 
-> 🔁 **Re-review of the changes since the review at \`aaaaaaa\`** (2 new commits, \`aaaaaaa\` → \`bbbbbbb\`).
-> This review only checks the 3 points raised last time, whether each was fixed or answered, and whether the 2 new commits introduce a new problem. The rest of the PR wasn't reviewed again, and points from last time aren't re-raised in new words.
-> Result: 1 fixed, 1 answered, 1 still open, 1 new.
+> 🔁 **Re-review since \`aaaaaaa\`** (2 new commits): only the 3 earlier points and what the new commits changed were checked.
+> 1 fixed, 1 answered, 1 still open, 1 new.
 
 ### Still open from the last review
 1. 🟡 **Backoff has no upper bound**
@@ -167,8 +166,8 @@ test('followUpDigest: still open first, numbered; new findings after; resolved f
 
 <details><summary>Resolved since the last review: 1 fixed, 1 answered</summary>
 
-- ✅ **Fixed:** Retry resends a chunk the server already stored: upload.ts:41 now sends the offset
-- 💬 **Answered:** The spec says uploads over 5 GB are refused, but \`MAX_SIZE\` is 50 GB: "The 5 GB limit is the gateway's; MAX_SIZE is the storage cap." gateway.yml:3 sets 5 GB.
+- ✅ Retry resends a chunk the server already stored
+- 💬 The spec says uploads over 5 GB are refused, but \`MAX_SIZE\` is 50 GB
 </details>
 
 <details><summary>In the new commits: 1 minor item</summary>
@@ -187,7 +186,7 @@ test('followUpDigest verdict: an open or disputed Must fix requests changes; all
   assert.match(blocking, /1\. 🔴 \*\*Retry resends a chunk the server already stored\*\*\n {3}`upload\.ts:41` · `sendChunk`\n {3}Reply: "It never times out\." This doesn't settle it: upload\.ts:40 has a 30 s timeout\./);
   const clean = followUpDigest({ previous: PREVIOUS, statuses: [fixed(), fixed(), fixed()], facts: FACTS });
   assert.match(clean, /^\*\*Verdict:\*\* ✅ Ship\. All 3 earlier points resolved, nothing new\./);
-  assert.match(clean, /> Result: 3 fixed, no new problems in the new commits\./);
+  assert.match(clean, /\n> 3 fixed, nothing new\./);
   assert.equal(verdictFromText(clean).event, 'approve');
   // A new Must fix blocks even when everything earlier is fixed.
   const fresh = followUpDigest({ previous: PREVIOUS, statuses: [fixed(), fixed(), fixed()], newBody: '### Must fix\n1. 🔴 **Breaks login**\n   `auth.ts:3`\n   Fix: x.', newFindings: [{ status: 'Confirmed', priority: 'Must fix' }], facts: FACTS });
@@ -200,11 +199,19 @@ test('followUpDigest verdict: an open or disputed Must fix requests changes; all
 test('reReviewNotice variants: no new commits, base merged in, chained follow-up', () => {
   const counts = { fixed: 0, answered: 1, open: 1, added: 0 };
   assert.equal(reReviewNotice({ ...FACTS, commits: 0, total: 2, counts }),
-    '> 🔁 **Re-review of the changes since the review at `aaaaaaa`**.\n> This review only checks the replies to the 2 points raised last time; there are no new commits since then. The rest of the PR wasn\'t reviewed again.\n> Result: 1 answered, 1 still open.');
-  assert.match(reReviewNotice({ ...FACTS, merged: 'main', total: 2, counts }), /\n> Changes merged in from `main` weren't reviewed\.\n/);
-  const chained = reReviewNotice({ ...FACTS, commits: 1, chained: true, total: 2, counts });
-  assert.match(chained, /since the follow-up at `aaaaaaa`\*\* \(1 new commit,/);
-  assert.match(chained, /checks the 2 points still open last time, .* whether the 1 new commit introduces a new problem/);
+    '> 🔁 **Re-review since `aaaaaaa`** (no new commits): only the replies to the 2 earlier points were checked.\n> 1 answered, 1 still open.');
+  assert.match(reReviewNotice({ ...FACTS, merged: 'main', total: 2, counts }), /were checked\. Changes merged in from `main` weren't reviewed\.\n/);
+  assert.equal(reReviewNotice({ ...FACTS, commits: 1, chained: true, total: 2, counts }),
+    '> 🔁 **Re-review since the follow-up at `aaaaaaa`** (1 new commit): only the 2 earlier points still open and what the new commit changed were checked.\n> 1 answered, 1 still open, nothing new.');
+});
+
+test('shortTitle cuts long titles at a word and never leaves a code span open', () => {
+  assert.equal(shortTitle('Backoff has no upper bound.'), 'Backoff has no upper bound');
+  const long = 'Is `**/*.md` low on purpose, so that `SKILL.md` and agent bodies which instruct agents are `merge_eligible`, when only a few fields count?';
+  const cut = shortTitle(long);
+  assert(cut.length <= 82, cut);
+  assert.equal((cut.match(/`/g) ?? []).length % 2, 0);
+  assert.match(cut, / …$/);
 });
 
 test('withNotice puts the fallback reason under the verdict line', () => {

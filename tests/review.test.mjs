@@ -336,7 +336,7 @@ test('a follow-up with no new commits checks the replies only: no scan, no verif
   const result = await runPipeline('https://github.com/acme/widget/pull/42', { root, adapters, now: NOW, progress: (text) => notes.push(String(text)) });
   assert.deepEqual(calls, [['plan', { full: false }], ['followUp']]);
   assert.match(result.digest, /^\*\*Verdict:\*\* ✅ Ship\. The earlier point is resolved\./);
-  assert.match(result.digest, /only checks the replies to the 1 point raised last time; there are no new commits/);
+  assert.match(result.digest, /\(no new commits\): only the replies to the 1 earlier point were checked\./);
   assert.deepEqual(result.followUp, { old: 'a'.repeat(40) });
   assert(notes.some((note) => note.includes('Follow-up of your review at `aaaaaaa`: no new commits, 1 finding to check.')));
 });

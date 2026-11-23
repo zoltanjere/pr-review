@@ -277,8 +277,8 @@ test('a PR re-reviewed after fixes gets a follow-up: earlier findings checked, n
   assert.equal(diffPath.endsWith('new-diff.txt'), true);
   const digest = await readFile(join(dir, (await readdir(dir)).find((file) => file.endsWith('-digest.md'))), 'utf8');
   assert.match(digest, /^\*\*Verdict:\*\* ✅ Ship\. The earlier point is resolved, nothing new\./);
-  assert.match(digest, new RegExp(`Re-review of the changes since the review at \`${f.old.slice(0, 7)}\`\\*\\* \\(1 new commit`));
-  assert.match(digest, /✅ \*\*Fixed:\*\* Empty input crashes/);
+  assert.match(digest, new RegExp(`Re-review since \`${f.old.slice(0, 7)}\`\\*\\* \\(1 new commit\\)`));
+  assert.match(digest, /\n- ✅ Empty input crashes\n/);
 });
 
 test('a rewritten history falls back to a full review and tells the author why', async (t) => {

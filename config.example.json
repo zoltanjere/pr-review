@@ -1,5 +1,12 @@
 {
   "model": "claude-sonnet-5.5",
   "azureDevOpsOrg": "https://dev.azure.com/your-organization",
-  "defaultRepository": "your-org/your-repo"
+  "defaultRepository": "your-org/your-repo",
+  "watch": {
+    "events": [
+      "new",
+      "fixes-after-changes"
+    ],
+    "intervalMinutes": 5
+  }
 }

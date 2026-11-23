@@ -575,3 +575,19 @@ test('preparation records the draft state and the state of referenced PRs, and s
   assert.deepEqual(context.references[0], { reference: 'acme/tools#163', title: 'Tool flags', state: 'closed', pullRequest: true, mergedAt: '2026-11-11T08:57:15Z' });
   assert.match(context.references[1].error, /not found/);
 });
+
+test('watch reads open PRs with mergeable, and a departed PR outcome with one read-only call', async () => {
+  const calls = [];
+  const execute = async (command, args) => {
+    calls.push([command, ...args]);
+    if (args[0] === 'pr' && args[1] === 'list') return '[]';
+    return JSON.stringify({ state: 'MERGED', mergedAt: '2026-11-23T10:00:00Z', mergedBy: { login: 'lee-park' }, title: 'feat: x', author: { login: 'alice' }, url: 'https://github.com/acme/widget/pull/7' });
+  };
+  const adapters = createAdapters({ execute, progress: () => {} });
+  await adapters.listOpenPrs('acme/widget');
+  assert.match(calls[0].join(' '), /--json \S*,mergeable$/);
+  assert.deepEqual(await adapters.prOutcome('acme/widget', 7), {
+    state: 'MERGED', mergedAt: '2026-11-23T10:00:00Z', mergedBy: 'lee-park', title: 'feat: x', author: 'alice', url: 'https://github.com/acme/widget/pull/7',
+  });
+  assert.deepEqual(calls[1], ['gh', 'pr', 'view', '7', '--repo', 'acme/widget', '--json', 'state,mergedAt,mergedBy,title,author,url']);
+});

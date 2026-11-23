@@ -777,6 +777,11 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
       return JSON.parse(await execute('gh', ['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '200',
         '--json', 'number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,createdAt,updatedAt,mergeable']));
     },
+    // What happened to a PR that left the open list, for watch's merge events.
+    async prOutcome(repo, number) {
+      const view = JSON.parse(await execute('gh', ['pr', 'view', String(number), '--repo', repo, '--json', 'state,mergedAt,mergedBy,title,author,url']));
+      return { state: view.state, mergedAt: view.mergedAt ?? null, mergedBy: view.mergedBy?.login ?? null, title: view.title, author: view.author?.login, url: view.url };
+    },
     // The commit the viewer's latest review covered, for reviews without our
     // footer. gh pr list leaves review commits empty, the REST API does not.
     async reviewCommit(repo, number, viewer) {

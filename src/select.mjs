@@ -20,8 +20,8 @@ export function reviewedHead(review) {
   return /(?:Reviewed|pr-review) at `([0-9a-f]{7,40})`/.exec(review?.body ?? '')?.[1] ?? null;
 }
 
-const isBot = (author) => Boolean(author?.is_bot) || /\[bot\]$/.test(author?.login ?? '');
-const isRequested = (pr, viewer) => (pr.reviewRequests ?? []).some((request) => request?.login === viewer);
+export const isBot = (author) => Boolean(author?.is_bot) || /\[bot\]$/.test(author?.login ?? '');
+export const isRequested = (pr, viewer) => (pr.reviewRequests ?? []).some((request) => request?.login === viewer);
 
 // Each state has a priority (rank), an icon and a colour, so the meaning never
 // depends on colour alone. The colour marks the icon and the group heading; the
@@ -63,9 +63,12 @@ export function age(ms) {
 // `ageMs` is how long ago the activity in the label happened.
 // What other people did on one of your PRs: "2 approvals · 1 change request ·
 // conflicts", or "no reviews yet". Your own comments and bot reviews don't count.
+// Other people's latest reviews on a PR: not yours, not bots or Copilot.
+export const otherReviews = (pr, viewer) => (pr.latestReviews ?? []).filter((review) => review?.author?.login
+  && review.author.login !== viewer && !isBot(review.author) && !/copilot/i.test(review.author.login));
+
 export function ownLabel(pr, viewer) {
-  const others = (pr.latestReviews ?? []).filter((review) => review?.author?.login && review.author.login !== viewer
-    && !isBot(review.author) && !/copilot/i.test(review.author.login));
+  const others = otherReviews(pr, viewer);
   const reviews = [['APPROVED', 'approval', 'approvals'], ['CHANGES_REQUESTED', 'change request', 'change requests'], ['COMMENTED', 'comment', 'comments']]
     .map(([state, one, many]) => [others.filter((review) => review.state === state).length, one, many])
     .filter(([n]) => n).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
@@ -92,8 +95,10 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
     const count = newer?.count ?? 0;
     const what = count ? `${count} new commit${count === 1 ? '' : 's'}` : 'new commits';
     // You approved: lower priority than fixes pushed after your change request.
-    if (mine.state === 'APPROVED') return { ...at('approved', newer?.last ?? pr.updatedAt), label: `approved · ${what}` };
-    return { ...at('fixes', newer?.last ?? pr.updatedAt), label: [what, ago(newer?.last ?? pr.updatedAt)].filter(Boolean).join(' · ') };
+    // `review` and `commits` tell watch which review type the pushes came after.
+    const pushed = { review: mine.state, commits: newer?.count ?? null };
+    if (mine.state === 'APPROVED') return { ...at('approved', newer?.last ?? pr.updatedAt), ...pushed, label: `approved · ${what}` };
+    return { ...at('fixes', newer?.last ?? pr.updatedAt), ...pushed, label: [what, ago(newer?.last ?? pr.updatedAt)].filter(Boolean).join(' · ') };
   }
   if (isRequested(pr, viewer)) return { ...at('requested', pr.updatedAt), label: ['requested', ago(pr.updatedAt)].filter(Boolean).join(' · ') };
   if (fresh(pr.createdAt)) return { ...at('new', pr.createdAt), label: `opened ${ago(pr.createdAt)} ago` };
@@ -252,6 +257,28 @@ export function pickerRows(prs, width, { color = false, skipped = () => false } 
   return { rows, map };
 }
 
+// One read of a repository's open PRs: the viewer, every open PR as GitHub
+// returned it (`all`, which watch needs for drafts, bots and merges), and the
+// picker's candidate list. Used by the picker and by watch. Read-only.
+export async function scanRepo(repo, adapters, { now = Date.now(), seenAt = null, status = () => {} } = {}) {
+  status('reading open PRs');
+  const viewer = await adapters.viewer();
+  const all = await adapters.listOpenPrs(repo);
+  const list = await candidatePrs(all, viewer, {
+    now,
+    seenAt: Number.isFinite(seenAt) ? seenAt : null,
+    commitOf: (number) => {
+      status(`checking your review of #${number}`);
+      return adapters.reviewCommit(repo, number, viewer);
+    },
+    commitsSince: (number, base, head) => {
+      status(`counting new commits on #${number}`);
+      return adapters.commitsSince?.(repo, base, head) ?? null;
+    },
+  });
+  return { viewer, all, list };
+}
+
 // Lists the default repository's PRs that need review and lets the person pick
 // one. The loading is a visible step ("Loading open PRs of owner/repo" with
 // what it is doing right now), so the terminal never sits silent. `s` skips
@@ -271,21 +298,7 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
     run: async (ui) => {
       ui.status('checking local clone');
       await adapters.findClone(owner, name);
-      ui.status('reading open PRs');
-      const viewer = await adapters.viewer();
-      const prs = await adapters.listOpenPrs(repo);
-      list = await candidatePrs(prs, viewer, {
-        now,
-        seenAt: Number.isFinite(seenAt) ? seenAt : null,
-        commitOf: (number) => {
-          ui.status(`checking your review of #${number}`);
-          return adapters.reviewCommit(repo, number, viewer);
-        },
-        commitsSince: (number, base, head) => {
-          ui.status(`counting new commits on #${number}`);
-          return adapters.commitsSince?.(repo, base, head) ?? null;
-        },
-      });
+      ({ list } = await scanRepo(repo, adapters, { now, seenAt, status: (text) => ui.status(text) }));
       return `${list.prs.length} to review`;
     },
   }], { live, reporter });

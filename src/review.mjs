@@ -176,12 +176,12 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
 }
 
 export async function main(args, options = {}) {
-  if (args[0] === 'watch') return watchCommand(args.slice(1), options);
+  // The interactive watch returns to its picker after each review.
+  if (args[0] === 'watch') return watchCommand(args.slice(1), { review: (url) => reviewOne(url, { ...options, interactive: true }), ...options });
   const flags = args.filter((arg) => arg.startsWith('-'));
   const urls = args.filter((arg) => !arg.startsWith('-'));
   const unknown = flags.filter((flag) => !['-y', '--yes'].includes(flag));
   if (urls.length > 1 || unknown.length) throw new Error('Usage: reviewpr [--yes] [<GitHub PR URL>]\n       reviewpr watch [--once | --install | --uninstall]');
-  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const interactive = options.interactive ?? Boolean(!flags.length && process.stdin.isTTY && process.stderr.isTTY);
   let url = urls[0];
   if (url) parsePrUrl(url);
@@ -193,6 +193,15 @@ export async function main(args, options = {}) {
     url = await (options.pick ?? choosePr)(config.defaultRepository, createAdapters({ ...options, progress: () => {} }));
     if (!url) return;
   }
+  return reviewOne(url, { ...options, interactive });
+}
+
+// One review of one PR: run the pipeline, show the summary, then offer to
+// post (interactive) or print the digest. Used for a single PR and by the
+// interactive watch, which returns to its picker afterwards.
+export async function reviewOne(url, options = {}) {
+  const { interactive } = options;
+  const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   // In a terminal the run renders through listr2; the adapters' progress lines
   // are routed to the running step. Otherwise plain "[progress]" lines.
   const live = !options.progress && isLive();

@@ -110,7 +110,10 @@ test('q and Esc cancel; a long list scrolls with a position marker', async () =>
   assert.match(term.text(), /❯ #7 row[\s\S]*7\/10/);
 });
 
-test('choosePr checks the clone, lists and returns the picked PR URL', async () => {
+test('choosePr checks the clone, lists and returns the picked PR URL', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'picker-state-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const statePath = join(dir, 'picker.json');
   const calls = [];
   const adapters = {
     findClone: async (owner, repo) => calls.push(['clone', owner, repo]),
@@ -119,13 +122,13 @@ test('choosePr checks the clone, lists and returns the picked PR URL', async () 
     reviewCommit: async () => null,
   };
   const term = fakeTerminal();
-  const url = choosePr('acme/widget', adapters, term);
+  const url = choosePr('acme/widget', adapters, { ...term, statePath });
   term.press('return');
   assert.equal(await url, 'https://github.com/acme/widget/pull/42');
   assert.deepEqual(calls, [['clone', 'acme', 'widget'], ['list', 'acme/widget']]);
   assert.match(term.text(), /acme\/widget: 1 to review \(2 open; hidden: 1 draft\)/);
   const empty = fakeTerminal();
-  assert.equal(await choosePr('acme/widget', { ...adapters, listOpenPrs: async () => [pr(9, { isDraft: true })] }, empty), null);
+  assert.equal(await choosePr('acme/widget', { ...adapters, listOpenPrs: async () => [pr(9, { isDraft: true })] }, { ...empty, statePath }), null);
   assert.match(empty.text(), /Nothing to review in acme\/widget \(1 open; hidden: 1 draft\)/);
 });
 

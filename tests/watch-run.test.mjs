@@ -1,10 +1,11 @@
 import { test } from 'node:test';
+import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AGENT_LABEL, LOCK_STALE_MS, agentPlist, lockState, pollOnce, removeLock, runOnce, watchCommand, writeLock } from '../src/watch-run.mjs';
+import { AGENT_LABEL, LOCK_STALE_MS, agentPlist, lockState, pollOnce, removeLock, runApp, runOnce, watchCommand, writeLock } from '../src/watch-run.mjs';
 
 const REPO = 'acme/widget';
 const NOW = Date.parse('2026-11-23T12:00:00Z');
@@ -126,4 +127,95 @@ test('watch rejects unknown flags and bad event names before doing anything', as
   const configPath = join(dir, 'config.json');
   await writeFile(configPath, JSON.stringify({ model: 'm', defaultRepository: REPO, watch: { events: ['fixes'] } }));
   await assert.rejects(watchCommand(['--once'], { configPath, adapters: adaptersFor([[]]) }), /Unknown watch event "fixes"/);
+});
+
+// The interactive app, driven through the real picker with a fake terminal and timers.
+function appTerminal() {
+  const input = new EventEmitter();
+  input.setRawMode = () => {};
+  input.resume = () => {};
+  input.pause = () => {};
+  let text = '';
+  const output = { rows: 30, columns: 100, isTTY: false, write: (chunk) => { text += chunk; } };
+  const press = (key) => input.emit('keypress', key.length === 1 ? key : undefined, { name: key });
+  return { input, output, press, text: () => text, clear: () => { text = ''; } };
+}
+const until = async (check) => {
+  for (let i = 0; i < 500 && !check(); i++) await new Promise((resolve) => setImmediate(resolve));
+  assert(check(), 'timed out waiting');
+};
+
+async function app(t, lists, { events = ['new', 'merged'], outcome } = {}) {
+  const { paths } = await folder(t);
+  const adapters = { ...adaptersFor(lists, { outcome }), findClone: async () => {} };
+  const term = appTerminal();
+  const ticks = [];
+  const timers = { setInterval: (fn, ms) => { ticks.push({ fn, ms }); return ticks.length; }, clearInterval: () => {} };
+  const sent = [];
+  const reviewed = [];
+  const done = runApp(REPO, adapters, {
+    events, intervalMinutes: 5, paths, timers, input: term.input, output: term.output, now: () => NOW,
+    notify: async (n) => { sent.push(n.text); }, review: async (url) => { reviewed.push(url); },
+  });
+  const tick = () => ticks.find((timer) => timer.ms === 5 * 60_000).fn();
+  return { paths, term, done, sent, reviewed, tick, adapters };
+}
+
+test('the app refreshes in place, marks a new PR until the cursor reaches it, and r checks now', async (t) => {
+  const run = await app(t, [[pr(1)], [pr(1), pr(2, { updatedAt: '2026-11-23T11:00:00Z' })], [pr(1), pr(2, { updatedAt: '2026-11-23T11:00:00Z' })]]);
+  await until(() => run.term.text().includes('#1'));
+  assert(existsSync(run.paths.lock), 'the app holds the lock');
+  run.tick();
+  await until(() => run.term.text().includes('#2'));
+  assert.deepEqual(run.sent, ['● #2 new PR from alice']);
+  assert.match(run.term.text(), /#2 .*• /);
+  assert.match(run.term.text(), /checked 1m ago/);
+  // #1 stays highlighted after the refresh; moving onto #2 clears its mark.
+  assert.match(run.term.text().split('acme/widget:').at(-1), /❯ · #1/);
+  run.term.clear();
+  run.term.press('up');
+  await until(() => run.term.text().includes('❯ ↑ #2'));
+  assert.doesNotMatch(run.term.text().split('acme/widget:').at(-1), /• /);
+  run.term.press('r');
+  await until(() => run.adapters.calls.filter((call) => call === 'list').length === 3);
+  run.term.press('q');
+  await run.done;
+  assert(!existsSync(run.paths.lock), 'q frees the lock');
+  assert.match(run.term.text(), /Watch stopped/);
+});
+
+test('Enter reviews in the same terminal and comes back to a fresh list; merges show on the status line', async (t) => {
+  const outcome = () => ({ state: 'MERGED', mergedBy: 'lee', title: 'PR 1', url: 'u' });
+  const run = await app(t, [[pr(1), pr(2)], [pr(2)]], { outcome });
+  await until(() => run.term.text().includes('#2'));
+  run.term.press('return');
+  await until(() => run.reviewed.length === 1);
+  await until(() => run.term.text().includes('✔ #1 merged by lee · 1m ago'));
+  assert.deepEqual(run.sent, ['✔ #1 merged by lee']);
+  assert.deepEqual(run.reviewed, ['https://github.com/acme/widget/pull/1']);
+  run.term.press('q');
+  await run.done;
+});
+
+test('a second app is refused while one holds a live lock; an empty list keeps the app open', async (t) => {
+  const run = await app(t, [[]]);
+  await until(() => run.term.text().includes('0 to review'));
+  await assert.rejects(runApp(REPO, {}, { events: ['new'], intervalMinutes: 5, paths: run.paths }), /already running/);
+  run.term.press('q');
+  await run.done;
+});
+
+test('failed checks keep the app and its list open, and the third in a row notifies once', async (t) => {
+  const run = await app(t, [[pr(1)]]);
+  await until(() => run.term.text().includes('#1'));
+  run.adapters.listOpenPrs = async () => { throw new Error('gh: offline'); };
+  for (let i = 1; i <= 4; i++) {
+    run.tick();
+    await until(() => run.term.text().includes(`check failed (${i}×)`));
+  }
+  assert.deepEqual(run.sent, ['watch can\'t reach GitHub']);
+  assert.match(run.term.text().split('acme/widget:').at(-1), /❯ · #1/);
+  assert.match(await readFile(run.paths.log, 'utf8'), /poll failed: gh: offline/);
+  run.term.press('q');
+  await run.done;
 });

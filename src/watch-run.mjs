@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAdapters, readConfig } from './adapters.mjs';
 import { isSkipped, loadJson, loadState, saveJson } from './picker-state.mjs';
-import { scanRepo } from './select.mjs';
+import { age, choosePr, scanRepo } from './select.mjs';
 import { departed, notify as showNotification, watchConfig, watchEvents } from './watch.mjs';
 
 // Running watch: one poll (shared by the launchd mode and the interactive
@@ -29,10 +29,10 @@ export const AGENT_LABEL = 'local.reviewpr.watch';
 // One poll: scan, look up PRs that left the open list (only with a merge event
 // on), decide the notifications, remember, then show them. The memory is saved
 // before notifying, so a failed notification never repeats on the next poll.
-export async function pollOnce(repo, adapters, { events, paths = PATHS, notify = showNotification, now = Date.now(), status = () => {} } = {}) {
+export async function pollOnce(repo, adapters, { events, paths = PATHS, notify = showNotification, now = Date.now(), seenAt = null, status = () => {} } = {}) {
   const memory = loadJson(paths.memory, MEMORY_FIELDS);
   const skips = loadState(paths.picker).skipped;
-  const scan = await scanRepo(repo, adapters, { now, status });
+  const scan = await scanRepo(repo, adapters, { now, seenAt, status });
   const outcomes = {};
   if (events.includes('merged') || events.includes('merged-reviewed')) {
     for (const number of departed(memory, repo, scan.all)) {
@@ -194,5 +194,99 @@ export async function watchCommand(args, options = {}) {
     await runOnce(config.defaultRepository, adapters, { events, paths, notify: options.notify });
     return;
   }
-  throw new Error('The interactive watch is not available yet; use reviewpr watch --once or --install.');
+  const interactive = options.interactive ?? Boolean(process.stdin.isTTY && process.stderr.isTTY);
+  if (!interactive) throw new Error('The interactive watch needs a terminal. In the background, use reviewpr watch --install.');
+  await runApp(config.defaultRepository, adapters, { events, intervalMinutes, paths, notify: options.notify, review: options.review, input: options.input, output: options.output });
+}
+
+// Events that never become picker rows: they show on the status line only.
+const NOTICE_ONLY = new Set(['merged', 'merged-reviewed', 'my-pr-reviewed', 'my-pr-conflicts']);
+const FAILURES_BEFORE_NOTICE = 3;
+
+// `reviewpr watch`: the picker, kept open. It polls every interval (also
+// during a review, then only as desktop notifications), refreshes the list in
+// place, and Enter runs a review in this terminal and comes back here. Holds
+// the lock so the launchd mode stays quiet meanwhile; q quits and frees it.
+export async function runApp(repo, adapters, {
+  events, intervalMinutes, paths = PATHS, notify = showNotification, review, input, output = process.stderr,
+  now = () => Date.now(), pick = choosePr, alive, timers = { setInterval, clearInterval },
+} = {}) {
+  if (lockState(paths.lock, { now: now(), alive }) === 'live') throw new Error('Another reviewpr watch is already running in a terminal.');
+  writeLock(paths.lock, { now: now() });
+  const beat = timers.setInterval(() => writeLock(paths.lock, { now: now() }), 60_000);
+  const marks = new Set();
+  const notices = [];
+  let listener = null;
+  let checkedAt = null;
+  let failures = 0;
+  let lastError = null;
+  let seenAt = null;
+  let polling = null;
+  let lastScan = null;
+  const poll = (status = () => {}) => {
+    polling ??= (async () => {
+      try {
+        const result = await pollOnce(repo, adapters, { events, paths, notify, now: now(), seenAt, status });
+        checkedAt = now();
+        lastScan = result.scan;
+        failures = 0;
+        lastError = null;
+        for (const n of result.notifications) {
+          if (n.events.every((event) => NOTICE_ONLY.has(event))) notices.unshift({ text: n.text, at: checkedAt });
+          else marks.add(n.number);
+        }
+        notices.splice(3);
+        for (const failure of result.failed) log(paths.log, `notification failed: ${failure}`, { now: checkedAt });
+        listener?.(result.scan.list);
+        return result;
+      } catch (error) {
+        failures++;
+        lastError = error;
+        log(paths.log, `poll failed: ${error.message}`, { now: now() });
+        if (failures === FAILURES_BEFORE_NOTICE) {
+          await notify({ repo, number: 0, title: error.message, url: `https://github.com/${repo}/pulls`, events: [], text: 'watch can\'t reach GitHub' }).catch(() => {});
+        }
+        listener?.(null);
+        return null;
+      } finally {
+        polling = null;
+      }
+    })();
+    return polling;
+  };
+  const status = () => [
+    checkedAt ? `checked ${age(Math.max(0, now() - checkedAt))} ago` : null,
+    lastError ? `⚠ check failed (${failures}×), retrying: ${lastError.message}` : null,
+    ...notices.map((notice) => `${notice.text} · ${age(Math.max(0, now() - notice.at))} ago`),
+  ].filter(Boolean).join(' · ');
+  const timer = timers.setInterval(() => { poll(); }, intervalMinutes * 60_000);
+  const watch = {
+    marks,
+    status,
+    refresh: () => { poll(); },
+    subscribe: (apply) => { listener = apply; return () => { if (listener === apply) listener = null; }; },
+    scanner: async (report, options) => {
+      seenAt = options.seenAt;
+      // A failed check keeps the last list (the status line says so); only a
+      // first load that fails stops the app.
+      const result = await poll(report);
+      if (!result && !lastScan) throw lastError;
+      return result?.scan ?? lastScan;
+    },
+  };
+  try {
+    for (;;) {
+      const url = await pick(repo, adapters, { input, output, watch, statePath: paths.picker });
+      if (!url) break;
+      try {
+        await review(url);
+      } catch (error) {
+        output.write(`${error.message}\n`);
+      }
+    }
+  } finally {
+    timers.clearInterval(timer);
+    timers.clearInterval(beat);
+    removeLock(paths.lock);
+  }
 }

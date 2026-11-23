@@ -167,7 +167,10 @@ export function formatRows(prs, width = 100, { color = false } = {}) {
 // ↑/↓ or k/j move, Enter picks, q, Esc or Ctrl-C cancels. A row given as
 // { heading } is a group title the cursor skips. `actions` maps a key to a
 // handler (index) => { rows, title, index } | undefined, to redraw the list.
-export function pickFromList(title, rows, { input = process.stdin, output = process.stderr, initial = 0, hint = 'Enter review · q cancel', actions = {} } = {}) {
+// `onMove(index)` may return such an update after the cursor moves. `control`,
+// when given, gets update(next) to redraw from outside (a background refresh)
+// and index() for the highlighted row. `status()` is a dim line above the keys.
+export function pickFromList(title, rows, { input = process.stdin, output = process.stderr, initial = 0, hint = 'Enter review · q cancel', actions = {}, onMove, control, status } = {}) {
   const c = palette(!process.env.NO_COLOR && output.isTTY !== false);
   return new Promise((resolve) => {
     let items = rows;
@@ -202,27 +205,41 @@ export function pickFromList(title, rows, { input = process.stdin, output = proc
       const choices = items.filter((_, i) => !isHeading(i)).length;
       const position = items.slice(0, index + 1).filter((_, i) => !isHeading(i)).length;
       const more = items.length > size ? ` · ${position}/${choices}` : '';
+      const line = status?.();
+      if (line) lines.push(c.dim(line));
       lines.push(c.dim(`↑/↓ move · ${hint}${more}`));
       output.write(`${lines.join('\n')}\n`);
       drawn = lines.length;
     };
+    const apply = (update) => {
+      if (!update) return;
+      items = update.rows ?? items;
+      heading = update.title ?? heading;
+      index = settle(update.index ?? index);
+    };
+    let done = false;
+    if (control) {
+      control.update = (update) => { if (!done) { apply(update); draw(); } };
+      control.index = () => index;
+    }
     const finish = (value) => {
+      done = true;
       input.off('keypress', onKey);
       try { input.setRawMode?.(false); } catch { /* terminal already gone */ }
       input.pause?.();
       resolve(value);
     };
     const onKey = (text, key = {}) => {
-      if (key.name === 'up' || text === 'k') index = nearest(index - 1, -1) ?? index;
-      else if (key.name === 'down' || text === 'j') index = nearest(index + 1, 1) ?? index;
-      else if (key.name === 'return' || key.name === 'enter') return selectable(index) ? finish(index) : undefined;
+      if (key.name === 'up' || text === 'k' || key.name === 'down' || text === 'j') {
+        const up = key.name === 'up' || text === 'k';
+        index = (up ? nearest(index - 1, -1) : nearest(index + 1, 1)) ?? index;
+        apply(onMove?.(index));
+      } else if (key.name === 'return' || key.name === 'enter') return selectable(index) ? finish(index) : undefined;
       else if (key.name === 'escape' || text === 'q' || (key.ctrl && key.name === 'c')) return finish(null);
       else if (text && actions[text]) {
         const update = actions[text](index);
         if (!update) return undefined;
-        items = update.rows ?? items;
-        heading = update.title ?? heading;
-        index = settle(update.index ?? index);
+        apply(update);
       } else return undefined;
       draw();
       return undefined;
@@ -237,10 +254,10 @@ export function pickFromList(title, rows, { input = process.stdin, output = proc
 
 // Rows for the picker: a heading per state group, then that group's PRs.
 // Returns the rows and, per row, the PR it stands for (null for a heading).
-export function pickerRows(prs, width, { color = false, skipped = () => false } = {}) {
+export function pickerRows(prs, width, { color = false, skipped = () => false, marked = () => false } = {}) {
   const shown = prs.map((pr) => (skipped(pr)
     ? { ...pr, state: { ...pr.state, label: `skipped · ${pr.state.label}`, dim: true } }
-    : pr));
+    : marked(pr) ? { ...pr, state: { ...pr.state, label: `• ${pr.state.label}` } } : pr));
   const lines = formatRows(shown, width, { color });
   const rows = [];
   const map = [];
@@ -284,7 +301,11 @@ export async function scanRepo(repo, adapters, { now = Date.now(), seenAt = null
 // what it is doing right now), so the terminal never sits silent. `s` skips
 // the highlighted PR until its head changes, `a` shows skipped PRs. Returns
 // the PR URL, or null when nothing was picked.
-export async function choosePr(repo, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now() } = {}) {
+// With `watch` (the interactive watch app), the list stays open while empty,
+// refreshes in place, marks new PRs with • until the cursor reaches them, and
+// shows a status line: watch = { scanner(status, { now, seenAt }), subscribe(apply)
+// returning an unsubscribe, refresh(), status(), marks: Set of PR numbers }.
+export async function choosePr(repo, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now(), watch = null } = {}) {
   const [owner, name] = repo.split('/');
   // Read the last look before listing: New and Updated mean "since then".
   const state = loadState(statePath);
@@ -298,7 +319,9 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
     run: async (ui) => {
       ui.status('checking local clone');
       await adapters.findClone(owner, name);
-      ({ list } = await scanRepo(repo, adapters, { now, seenAt, status: (text) => ui.status(text) }));
+      const status = (text) => ui.status(text);
+      const looked = Number.isFinite(seenAt) ? seenAt : null;
+      ({ list } = await (watch ? watch.scanner(status, { now, seenAt: looked }) : scanRepo(repo, adapters, { now, seenAt: looked, status })));
       return `${list.prs.length} to review`;
     },
   }], { live, reporter });
@@ -310,7 +333,7 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
   // This visit counts as looking, also when nothing is picked.
   state.lastLooked[repo] = new Date(now).toISOString();
   save();
-  if (!list.prs.length) {
+  if (!list.prs.length && !watch) {
     output.write(`Nothing to review in ${repo} (${hiddenSummary(list)}).\n`);
     return null;
   }
@@ -322,7 +345,7 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
   const build = (focus) => {
     const visible = showSkipped ? list.prs : list.prs.filter((pr) => !skipped(pr));
     const count = list.prs.filter(skipped).length;
-    view = pickerRows(visible, width, { color, skipped });
+    view = pickerRows(visible, width, { color, skipped, marked: (pr) => Boolean(watch?.marks.has(pr.number)) });
     const looked = Number.isFinite(seenAt) ? ` · last looked ${age(Math.max(0, now - seenAt))} ago` : '';
     const yours = list.prs.filter((pr) => pr.state.key === 'mine' && !skipped(pr)).length;
     const title = `${repo}: ${list.prs.length - count - yours} to review${yours ? `, ${yours} yours` : ''}${count ? `, ${count} skipped` : ''} (${hiddenSummary(list)})${looked}`;
@@ -344,14 +367,25 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
       showSkipped = !showSkipped;
       return build(view.map[index]);
     },
+    ...(watch ? { r: () => { watch.refresh(); return undefined; } } : {}),
+  };
+  const control = {};
+  // A background refresh: keep the highlighted PR highlighted.
+  const unsubscribe = watch?.subscribe((next) => {
+    if (next) list = next;
+    control.update?.(build(view.map[control.index?.() ?? 0]));
+  });
+  const onMove = (index) => {
+    const pr = view.map[index];
+    return pr && watch?.marks.delete(pr.number) ? build(pr) : undefined;
   };
   const first = build(null);
   const picked = await pickFromList(first.title, first.rows, {
-    input, output, initial: first.index, actions,
-    hint: 'Enter review · s skip until it changes · a show skipped · q cancel',
-  });
-  if (picked === null) {
-    output.write('Nothing selected.\n');
+    input, output, initial: first.index, actions, control, onMove: watch ? onMove : undefined, status: watch?.status,
+    hint: `Enter review · s skip until it changes · a show skipped${watch ? ' · r refresh' : ''} · q ${watch ? 'quit' : 'cancel'}`,
+  }).finally(() => unsubscribe?.());
+  if (picked === null || !view.map[picked]) {
+    output.write(watch ? 'Watch stopped.\n' : 'Nothing selected.\n');
     return null;
   }
   return `https://github.com/${repo}/pull/${view.map[picked].number}`;

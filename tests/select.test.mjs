@@ -20,7 +20,7 @@ test('the reviewed commit is read from our footer, old and new wording', () => {
   assert.equal(reviewedHead({ body: 'LGTM' }), null);
 });
 
-test('only PRs that still need my review are listed, by state then newest first', async () => {
+test('only PRs that still need my review are listed, by state then by the age shown', async () => {
   const lookups = [];
   const { prs, hidden, open } = await candidatePrs([
     pr(1),
@@ -35,7 +35,7 @@ test('only PRs that still need my review are listed, by state then newest first'
     pr(11, { latestReviews: [review('APPROVED', 'manual approval')] }),
     pr(12, { latestReviews: [review('APPROVED', 'manual approval, commit unknown')] }),
   ], ME, { now: Date.parse('2026-11-30T10:00:00Z'), commitOf: async (number) => { lookups.push(number); return number === 11 ? HEAD : null; } });
-  // #3 had changes requested at an older commit: fixes pushed, first. The rest wait, newest activity first.
+  // #3 had changes requested at an older commit: fixes pushed, first. The rest wait, youngest age first.
   // My own PR (#8) is listed last, under Your PRs.
   assert.deepEqual(prs.map((item) => [item.number, item.state.key]), [[3, 'fixes'], [6, 'waiting'], [4, 'waiting'], [12, 'waiting'], [1, 'waiting'], [8, 'mine']]);
   assert.deepEqual(hidden, { reviewed: 3, draft: 1, bot: 1 });
@@ -295,4 +295,12 @@ test('the age column is coloured by age and the icon by state; headings take the
   assert.match(line, /^◌ #6  \x1b\[31m20d  \x1b\[39m/, 'a 20-day-old PR has a red age');
   assert.doesNotMatch(line, /\x1b\[2m/, 'old PRs are not dimmed: they should stand out');
   assert.deepEqual(rows[0], { heading: 'Waiting', color: null });
+});
+
+test('within a group, rows follow the age column, youngest first, even when updatedAt says otherwise', async () => {
+  // New PRs show their opening time: #1 opened 1h ago but was updated just now, #2 opened 5h ago, #3 3h ago.
+  const fresh = (number, opened, updated) => statePr(number, { createdAt: hoursAgo(opened), updatedAt: hoursAgo(updated) });
+  const { prs } = await candidatePrs([fresh(2, 5, 4), fresh(1, 1, 0.1), fresh(3, 3, 2), statePr(4, { createdAt: undefined, updatedAt: undefined })], ME, { now: NOW });
+  assert.deepEqual(prs.filter((pr) => pr.state.key === 'new').map((pr) => [pr.number, pr.state.ageMs / 3_600_000]), [[1, 1], [3, 3], [2, 5]]);
+  assert.equal(prs.at(-1).number, 4, 'an unknown age sorts last');
 });

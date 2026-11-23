@@ -112,7 +112,7 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
 // or your latest review was dismissed, covers an older commit, or you were
 // asked again. Drafts, your own PRs and bot PRs are hidden. When the reviewed
 // commit can't be found, the PR is shown: listing too much is safer than
-// hiding one. Sorted by state priority, then most recent activity.
+// hiding one. Sorted by state priority, then by the age shown in the row.
 // `commitsSince(number, covered, head)` counts the commits after your review;
 // it is called only for PRs you reviewed that have changed since.
 export async function candidatePrs(prs, viewer, { commitOf = async () => null, commitsSince = async () => null, now = Date.now(), seenAt = null } = {}) {
@@ -132,7 +132,9 @@ export async function candidatePrs(prs, viewer, { commitOf = async () => null, c
     const newer = changed ? await Promise.resolve().then(() => commitsSince(pr.number, covered, pr.headRefOid)).catch(() => null) : null;
     kept.push({ ...pr, state: prState(pr, viewer, { mine, covered, newer, now, seenAt }) });
   }
-  kept.sort((a, b) => a.state.rank - b.state.rank || String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
+  // Within a group, by the age shown in the row (youngest first: 1h, 3h, 5h); unknown ages last.
+  const shownAge = (pr) => (Number.isFinite(pr.state.ageMs) ? pr.state.ageMs : Infinity);
+  kept.sort((a, b) => a.state.rank - b.state.rank || shownAge(a) - shownAge(b));
   return { prs: kept, hidden, open: prs.length };
 }
 

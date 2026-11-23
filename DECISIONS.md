@@ -343,7 +343,7 @@ Each entry has three parts:
     6. **Waiting:** the rest, with **◌** for 14 days or more without an update (labelled `idle`, with the age in red).
     7. **◆ Your PRs:** your own open PRs, drafts included, listed for a self-review. Your own reviews on them are ignored, so they're never hidden or shown as "fixes pushed". The label counts other people's latest reviews, leaving out bots and Copilot, and adds `conflicts` when `mergeable` is `CONFLICTING` ("1 approval · conflicts", or "no reviews yet"). The header counts them separately ("6 to review, 1 yours").
 
-    Within a group, the most recent activity comes first. A missing date counts as unknown, never as new.
+    Within a group, rows are sorted by the age shown in the row, youngest first (1h, 3h, 5h), so the order always matches the age column; for New that is the opening time, for Fixes pushed the last new commit. A missing date counts as unknown, never as new, and sorts last.
   - **Row layout:** `icon #number age author title  label`.
     - The age column comes right after the number: the creation time for New, the update time for Updated, the last new commit for Fixes pushed. It's coloured by age: green under a day, plain up to a week, yellow from a week, red from 14 days.
     - Labels hold only what the heading doesn't say (`3 new commits`, `requested`, `idle`, `approved · 2 new commits`, your PR's reviews). They follow the longest title.

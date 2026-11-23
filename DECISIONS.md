@@ -332,11 +332,14 @@ Each entry has three parts:
   - **States and order:** each PR gets one state, first match wins, shown with an icon, a colour and a label, and grouped under a heading in this order:
     1. **⟳ Fixes pushed:** your latest review was Request changes or Comment, and there are commits after it ("3 new commits · 2h"). The count comes from one `gh api repos/<repo>/compare/<reviewed>...<head>` call per changed PR, not from `gh pr list --json commits`: asking for every PR's commits exceeded GitHub's 500,000-node query limit on a real repository. If the count fails, the PR is still listed, as "new commits".
     2. **★ Asked for you:** you're in `reviewRequests`.
-    3. **● New:** created in the last 24 h.
-    4. **↑ Updated:** updated in the last 24 h, or you approved and new commits came in ("approved · 2 new commits").
-    5. **Waiting:** the rest, with **◌** and a dimmed row for 14 days or more without an update ("idle 23d").
+    3. **● New since you looked:** created after your last visit to the picker for this repository; on a first visit, in the last 24 h.
+    4. **↑ Updated since you looked:** updated after your last visit (first visit: 24 h).
+    5. **↑ Approved, new commits:** you approved and commits came in after ("approved · 2 new commits").
+    6. **Waiting:** the rest, with **◌** for 14 days or more without an update ("idle 23d").
 
     Within a group, the most recent activity comes first. A missing date counts as unknown, never as new.
+  - **Colours:** the icon and the group heading take the state's colour; the label is coloured by the age of the activity it names (green under a day, plain up to a week, yellow from a week, red from 14 days). Only skipped rows are dimmed.
+  - **Last looked:** `state/picker.json` records when you last opened the picker per repository, written when the list loads, so a cancelled pick still counts as a look.
   - **Skip:** `s` hides a PR until its head commit changes, and `a` shows skipped PRs. The skip list is `state/picker.json`, which is git-ignored and keyed by `owner/repo#number` with the head at skip time. Skips that have ended are pruned when the list is saved.
 - **How the reviewed commit is found:** `gh pr list` leaves review commits empty. Our posted footer names the commit ("Reviewed at `<sha>`", or the older "pr-review at `<sha>`"), so it's read from there for free. Only reviews without that footer cost one `gh api …/pulls/<n>/reviews` call (`commit_id`). If no commit can be found, the PR is listed: showing too much is safer than hiding.
 - **Why:**
@@ -344,6 +347,8 @@ Each entry has three parts:
   - Listing uses no model, so it's free.
   - **Colour is never the only signal:** the icon and label carry the state with `NO_COLOR` or in a pipe.
   - **Fixes pushed comes first:** a PR where you asked for changes and the author answered is the most likely to need you next.
+  - **Old PRs stand out instead of fading:** the first version dimmed stale rows, which hid exactly the PRs that had sat untouched. A red age label makes them visible.
+  - **"Since you looked" beats a fixed window:** with a 24-hour window, a list checked after a weekend showed nothing as new, while a list checked twice an hour showed the same PRs as new both times.
   - **Skip is local and ends on its own:** it must never write to GitHub, and a new commit is exactly when a skipped PR deserves another look.
 - **Don't:** Hide a PR because its reviewed commit is unknown.
 

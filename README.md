@@ -104,12 +104,13 @@ acme/widget: 6 to review, 1 skipped (8 open; hidden: 1 draft)
 - **Groups, most urgent first:**
   - **⟳ Fixes pushed:** you requested changes or commented, and the author has pushed since.
   - **★ Asked for you:** you're a requested reviewer.
-  - **● New:** opened in the last 24 h.
-  - **↑ Updated:** updated in the last 24 h. A PR you approved that has new commits also shows here.
+  - **● New since you looked / ↑ Updated since you looked:** opened or updated since you last opened the picker for this repository (on a first visit: the last 24 h). The header says when that was: `last looked 2d ago`.
+  - **↑ Approved, new commits:** you approved, and commits came in after.
   - **Waiting:** the rest. **◌** marks PRs idle for 14 days or more.
+- **Colours:** the icon and the group heading carry the state's colour. The label on the right is coloured by age: green under a day, plain up to a week, yellow from a week, red from two weeks, so a PR nobody touched stands out. Without colour, the icons and labels carry the same information.
 - **Hidden:** drafts, bot PRs and your own PRs.
 - **Keys:** `↑`/`↓` move, Enter reviews, and `q` cancels. `s` skips the highlighted PR until its author pushes a new commit, and `a` shows skipped PRs again (press `s` on one to unskip it).
-- **Where skips live:** in `state/picker.json` on your machine only, which is git-ignored. Nothing is written to GitHub.
+- **Where this is kept:** skips and the time you last looked live in `state/picker.json` on your machine only, which is git-ignored. Nothing is written to GitHub.
 
 While it runs, each step shows a spinner, a timer, and its live tokens and AI credits:
 

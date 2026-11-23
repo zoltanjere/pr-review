@@ -2,6 +2,12 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.7.0 (2026-11-23)
+
+- **New since you looked:** ● New and ↑ Updated mean opened or updated since you last opened the picker for that repository (24 hours on a first visit). The header shows `last looked 2d ago`.
+- **Age colours:** the label is green under a day, yellow from a week and red from two weeks. Stale PRs are no longer dimmed, so they stand out. Group headings take their state's colour.
+- **Approved, new commits** is its own group below Updated.
+
 ## 0.6.0 (2026-11-23)
 
 - **Referenced PRs:** preparation records the PR's draft state and the current state of up to 5 PRs or issues its body names (open, closed, merged when), with read-only `gh api` calls.

@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { palette, plainReporter, short } from './ui.mjs';
 import { isLive, runSteps } from './steps.mjs';
-import { isSkipped, loadSkips, saveSkips, skipKey } from './picker-state.mjs';
+import { isSkipped, loadState, saveState, skipKey } from './picker-state.mjs';
 
 // Which open PRs still need your review, what state each is in, and an
 // arrow-key picker for them. Listing uses read-only gh calls only; no model is
@@ -24,15 +24,28 @@ const isBot = (author) => Boolean(author?.is_bot) || /\[bot\]$/.test(author?.log
 const isRequested = (pr, viewer) => (pr.reviewRequests ?? []).some((request) => request?.login === viewer);
 
 // Each state has a priority (rank), an icon and a colour, so the meaning never
-// depends on colour alone. Stale shares the Waiting heading and sorts after it.
+// depends on colour alone. The colour marks the icon and the group heading; the
+// label on the right is coloured by age instead (see ageColor). Stale shares the
+// Waiting heading and sorts after it.
 export const STATES = {
   fixes: { rank: 0, icon: '⟳', heading: 'Fixes pushed', color: 'yellow' },
   requested: { rank: 1, icon: '★', heading: 'Asked for you', color: 'magenta' },
   new: { rank: 2, icon: '●', heading: 'New', color: 'green' },
   updated: { rank: 3, icon: '↑', heading: 'Updated', color: 'cyan' },
+  approved: { rank: 3.5, icon: '↑', heading: 'Approved, new commits', color: 'cyan' },
   waiting: { rank: 4, icon: '·', heading: 'Waiting', color: null },
-  stale: { rank: 5, icon: '◌', heading: 'Waiting', color: null, dim: true },
+  stale: { rank: 5, icon: '◌', heading: 'Waiting', color: null },
 };
+
+// Age of the PR's last activity, as a colour: fresh is green, a week old is
+// yellow, two weeks or more is red, so a PR nobody touched stands out.
+export function ageColor(ms) {
+  if (ms === null || ms === undefined) return null;
+  if (ms < DAY) return 'green';
+  if (ms < 7 * DAY) return null;
+  if (ms < STALE_DAYS * DAY) return 'yellow';
+  return 'red';
+}
 
 // "40m", "5h", "3d".
 export function age(ms) {
@@ -43,26 +56,35 @@ export function age(ms) {
 
 // The state of one listed PR, first match wins. `mine` is your latest review
 // (null when none or dismissed); `covered` is the commit it covered; `newer`
-// is { count, last } for the commits since then, when known.
-export function prState(pr, viewer, { mine = null, covered = null, newer = null, now = Date.now() } = {}) {
-  const at = (key) => ({ key, ...STATES[key] });
+// is { count, last } for the commits since then, when known. `seenAt` is when
+// you last opened the picker for this repository: New and Updated then mean
+// "since you looked"; without it (first visit) they mean the last 24 hours.
+// `ageMs` is how long ago the activity in the label happened.
+export function prState(pr, viewer, { mine = null, covered = null, newer = null, now = Date.now(), seenAt = null } = {}) {
+  const sinceLooked = Number.isFinite(seenAt);
   // Milliseconds since a timestamp, or null when it's missing: unknown is never "new".
   const since = (iso) => { const time = Date.parse(iso ?? ''); return Number.isNaN(time) ? null : now - time; };
   const ago = (iso) => (since(iso) === null ? '' : age(since(iso)));
   const within = (iso, ms) => since(iso) !== null && since(iso) < ms;
+  // New or changed: after your last look, or in the last 24 hours on a first visit.
+  const fresh = (iso) => (sinceLooked ? Date.parse(iso ?? '') > seenAt : within(iso, DAY));
+  const at = (key, time) => ({
+    key, ...STATES[key], ageMs: since(time),
+    ...(sinceLooked && (key === 'new' || key === 'updated') ? { heading: `${STATES[key].heading} since you looked` } : {}),
+  });
   const head = String(pr.headRefOid ?? '');
   if (mine && covered && !head.startsWith(covered)) {
     const count = newer?.count ?? 0;
     const what = count ? `${count} new commit${count === 1 ? '' : 's'}` : 'new commits';
     // You approved: lower priority than fixes pushed after your change request.
-    if (mine.state === 'APPROVED') return { ...at('updated'), label: `approved · ${what}` };
-    return { ...at('fixes'), label: [what, ago(newer?.last ?? pr.updatedAt)].filter(Boolean).join(' · ') };
+    if (mine.state === 'APPROVED') return { ...at('approved', newer?.last ?? pr.updatedAt), label: `approved · ${what}` };
+    return { ...at('fixes', newer?.last ?? pr.updatedAt), label: [what, ago(newer?.last ?? pr.updatedAt)].filter(Boolean).join(' · ') };
   }
-  if (isRequested(pr, viewer)) return { ...at('requested'), label: ['requested', ago(pr.updatedAt)].filter(Boolean).join(' · ') };
-  if (within(pr.createdAt, DAY)) return { ...at('new'), label: `opened ${ago(pr.createdAt)} ago` };
-  if (within(pr.updatedAt, DAY)) return { ...at('updated'), label: `updated ${ago(pr.updatedAt)} ago` };
-  if (since(pr.updatedAt) >= STALE_DAYS * DAY) return { ...at('stale'), label: `idle ${Math.floor(since(pr.updatedAt) / DAY)}d` };
-  return { ...at('waiting'), label: ago(pr.updatedAt) };
+  if (isRequested(pr, viewer)) return { ...at('requested', pr.updatedAt), label: ['requested', ago(pr.updatedAt)].filter(Boolean).join(' · ') };
+  if (fresh(pr.createdAt)) return { ...at('new', pr.createdAt), label: `opened ${ago(pr.createdAt)} ago` };
+  if (fresh(pr.updatedAt)) return { ...at('updated', pr.updatedAt), label: `updated ${ago(pr.updatedAt)} ago` };
+  if (since(pr.updatedAt) >= STALE_DAYS * DAY) return { ...at('stale', pr.updatedAt), label: `idle ${Math.floor(since(pr.updatedAt) / DAY)}d` };
+  return { ...at('waiting', pr.updatedAt), label: ago(pr.updatedAt) };
 }
 
 // Keeps the PRs worth reviewing, each with its state: no review from you yet,
@@ -72,7 +94,7 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
 // hiding one. Sorted by state priority, then most recent activity.
 // `commitsSince(number, covered, head)` counts the commits after your review;
 // it is called only for PRs you reviewed that have changed since.
-export async function candidatePrs(prs, viewer, { commitOf = async () => null, commitsSince = async () => null, now = Date.now() } = {}) {
+export async function candidatePrs(prs, viewer, { commitOf = async () => null, commitsSince = async () => null, now = Date.now(), seenAt = null } = {}) {
   const hidden = { reviewed: 0, draft: 0, yours: 0, bot: 0 };
   const kept = [];
   for (const pr of prs) {
@@ -84,8 +106,9 @@ export async function candidatePrs(prs, viewer, { commitOf = async () => null, c
     const covered = mine ? reviewedHead(mine) ?? (mine.commit?.oid || await commitOf(pr.number)) : null;
     if (covered && String(pr.headRefOid ?? '').startsWith(covered) && !isRequested(pr, viewer)) { hidden.reviewed++; continue; }
     const changed = mine && covered && !String(pr.headRefOid ?? '').startsWith(covered);
-    const newer = changed ? await commitsSince(pr.number, covered, pr.headRefOid).catch(() => null) : null;
-    kept.push({ ...pr, state: prState(pr, viewer, { mine, covered, newer, now }) });
+    // Whatever it returns or throws, a failed count never stops the listing.
+    const newer = changed ? await Promise.resolve().then(() => commitsSince(pr.number, covered, pr.headRefOid)).catch(() => null) : null;
+    kept.push({ ...pr, state: prState(pr, viewer, { mine, covered, newer, now, seenAt }) });
   }
   kept.sort((a, b) => a.state.rank - b.state.rank || String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
   return { prs: kept, hidden, open: prs.length };
@@ -100,8 +123,8 @@ export function hiddenSummary({ hidden, open }) {
 }
 
 // "#61  author  title", with numbers and authors aligned across the list. A PR
-// with a state also gets its icon in front and its label right-aligned, both
-// in the state's colour; stale and skipped rows are dimmed whole.
+// with a state also gets its icon in front, in the state's colour, and its
+// label right-aligned, coloured by age. Skipped rows are dimmed whole.
 export function formatRows(prs, width = 100, { color = false } = {}) {
   const c = palette(color);
   const numberWidth = Math.max(0, ...prs.map((pr) => String(pr.number).length)) + 1;
@@ -113,8 +136,9 @@ export function formatRows(prs, width = 100, { color = false } = {}) {
     const titleWidth = Math.max(10, width - head.length - labelWidth - 8);
     const text = `${short(pr.title ?? '', titleWidth).padEnd(titleWidth)}  `;
     if (pr.state.dim) return c.dim(`${pr.state.icon} ${head}${text}${pr.state.label.padStart(labelWidth)}`);
-    const tint = (part) => (pr.state.color ? c[pr.state.color](part) : part);
-    return `${tint(pr.state.icon)} ${head}${text}${tint(pr.state.label.padStart(labelWidth))}`;
+    const paint = (name, part) => (name ? c[name](part) : part);
+    const label = pr.state.label.padStart(labelWidth);
+    return `${paint(pr.state.color, pr.state.icon)} ${head}${text}${paint(ageColor(pr.state.ageMs), label)}`;
   });
 }
 
@@ -151,7 +175,7 @@ export function pickFromList(title, rows, { input = process.stdin, output = proc
       if (index >= top + size) top = index - size + 1;
       const lines = [c.bold(heading)];
       for (let i = top; i < Math.min(items.length, top + size); i++) {
-        if (isHeading(i)) lines.push(`  ${c.dim(items[i].heading)}`);
+        if (isHeading(i)) lines.push(`  ${items[i].color ? c.bold(c[items[i].color](items[i].heading)) : c.dim(items[i].heading)}`);
         else lines.push(i === index ? `${c.cyan('❯')} ${c.bold(items[i])}` : `  ${items[i]}`);
       }
       const choices = items.filter((_, i) => !isHeading(i)).length;
@@ -203,7 +227,7 @@ export function pickerRows(prs, width, { color = false, skipped = () => false } 
   shown.forEach((pr, i) => {
     if (pr.state.heading !== group) {
       group = pr.state.heading;
-      rows.push({ heading: group });
+      rows.push({ heading: group, color: pr.state.color });
       map.push(null);
     }
     rows.push(lines[i]);
@@ -219,6 +243,12 @@ export function pickerRows(prs, width, { color = false, skipped = () => false } 
 // the PR URL, or null when nothing was picked.
 export async function choosePr(repo, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now() } = {}) {
   const [owner, name] = repo.split('/');
+  // Read the last look before listing: New and Updated mean "since then".
+  const state = loadState(statePath);
+  const seenAt = Date.parse(state.lastLooked[repo] ?? '');
+  const save = () => {
+    try { saveState(statePath, state); } catch { /* the picker's memory is a convenience; never fail the pick */ }
+  };
   let list;
   await runSteps([{
     title: `Loading open PRs of ${repo}`,
@@ -230,6 +260,7 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
       const prs = await adapters.listOpenPrs(repo);
       list = await candidatePrs(prs, viewer, {
         now,
+        seenAt: Number.isFinite(seenAt) ? seenAt : null,
         commitOf: (number) => {
           ui.status(`checking your review of #${number}`);
           return adapters.reviewCommit(repo, number, viewer);
@@ -242,14 +273,17 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
       return `${list.prs.length} to review`;
     },
   }], { live, reporter });
-  if (!list.prs.length) {
-    output.write(`Nothing to review in ${repo} (${hiddenSummary(list)}).\n`);
-    return null;
-  }
-  const skips = loadSkips(statePath);
+  const skips = state.skipped;
   // Skips of PRs that are closed or have new commits have ended; drop them.
   for (const key of Object.keys(skips)) {
     if (key.startsWith(`${repo}#`) && !list.prs.some((pr) => skipKey(repo, pr) === key && isSkipped(repo, pr, skips))) delete skips[key];
+  }
+  // This visit counts as looking, also when nothing is picked.
+  state.lastLooked[repo] = new Date(now).toISOString();
+  save();
+  if (!list.prs.length) {
+    output.write(`Nothing to review in ${repo} (${hiddenSummary(list)}).\n`);
+    return null;
   }
   const skipped = (pr) => isSkipped(repo, pr, skips);
   const color = !process.env.NO_COLOR && output.isTTY !== false;
@@ -260,12 +294,10 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
     const visible = showSkipped ? list.prs : list.prs.filter((pr) => !skipped(pr));
     const count = list.prs.filter(skipped).length;
     view = pickerRows(visible, width, { color, skipped });
-    const title = `${repo}: ${list.prs.length - count} to review${count ? `, ${count} skipped` : ''} (${hiddenSummary(list)})`;
+    const looked = Number.isFinite(seenAt) ? ` · last looked ${age(Math.max(0, now - seenAt))} ago` : '';
+    const title = `${repo}: ${list.prs.length - count} to review${count ? `, ${count} skipped` : ''} (${hiddenSummary(list)})${looked}`;
     const index = Math.max(0, view.map.findIndex((pr) => pr && pr.number === focus?.number));
     return { rows: view.rows, title, index };
-  };
-  const save = () => {
-    try { saveSkips(statePath, skips); } catch { /* skipping is a convenience; never fail the pick */ }
   };
   const actions = {
     s: (index) => {

@@ -140,7 +140,7 @@ test('each PR gets one state, first match wins', async () => {
   const asked = statePr(2, { createdAt: hoursAgo(1), reviewRequests: [{ login: ME }] });
   const cases = [
     [prState(statePr(1), ME, { mine: { state: 'CHANGES_REQUESTED' }, covered: older.slice(0, 7), newer, now: NOW }), 'fixes', '2 new commits · 2h'],
-    [prState(statePr(1), ME, { mine: { state: 'APPROVED' }, covered: older, newer, now: NOW }), 'updated', 'approved · 2 new commits'],
+    [prState(statePr(1), ME, { mine: { state: 'APPROVED' }, covered: older, newer, now: NOW }), 'approved', 'approved · 2 new commits'],
     [prState(asked, ME, { now: NOW }), 'requested', 'requested · 3d'],
     [prState(statePr(3, { createdAt: hoursAgo(0.5) }), ME, { now: NOW }), 'new', 'opened 30m ago'],
     [prState(statePr(4, { updatedAt: hoursAgo(3) }), ME, { now: NOW }), 'updated', 'updated 3h ago'],
@@ -196,14 +196,14 @@ test('s skips a PR until its head changes, a shows skipped PRs again', async (t)
   assert.equal(first.url, 'https://github.com/acme/widget/pull/43');
   assert.match(first.text, /1 to review, 1 skipped/);
   const { readFile } = await import('node:fs/promises');
-  assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')), { skipped: { 'acme/widget#42': HEAD } });
+  assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')).skipped, { 'acme/widget#42': HEAD });
   assert.equal((await run('return')).url, 'https://github.com/acme/widget/pull/43', 'still skipped next time');
   const shown = await run('a', 'up', 'return'); // a keeps the cursor on #43; #42 reappears above it
   assert.equal(shown.url, 'https://github.com/acme/widget/pull/42');
   assert.match(shown.text, /skipped · 3d/);
   open = [statePr(42, { headRefOid: 'd'.repeat(40) }), statePr(43)];
   assert.equal((await run('return')).url, 'https://github.com/acme/widget/pull/42', 'a new commit ends the skip');
-  assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')), { skipped: { 'acme/widget#42': HEAD } }, 'pruned only when saved');
+  assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')).skipped, {}, 'an ended skip is pruned when the visit is saved');
 });
 
 test('new commits are counted only for PRs that changed since your review', async () => {
@@ -217,4 +217,51 @@ test('new commits are counted only for PRs that changed since your review', asyn
   assert.equal(prs[0].state.label, '3 new commits · 2h');
   const failing = await candidatePrs([changed], ME, { now: NOW, commitsSince: async () => { throw new Error('rate limited'); } });
   assert.equal(failing.prs[0].state.label, 'new commits · 3d', 'a failed count still lists the PR');
+  const plain = await candidatePrs([changed], ME, { now: NOW, commitsSince: () => null });
+  assert.equal(plain.prs[0].state.label, 'new commits · 3d', 'a counter that returns a plain null works too');
+});
+
+test('New and Updated mean since you last looked, and the visit is remembered', async (t) => {
+  const { prState } = await import('../src/select.mjs');
+  const seenAt = NOW - 3 * 24 * 3_600_000; // looked three days ago
+  const opened = prState(statePr(1, { createdAt: hoursAgo(48), updatedAt: hoursAgo(48) }), ME, { now: NOW, seenAt });
+  const touched = prState(statePr(2, { updatedAt: hoursAgo(60) }), ME, { now: NOW, seenAt });
+  const before = prState(statePr(3, { updatedAt: hoursAgo(24 * 4) }), ME, { now: NOW, seenAt });
+  assert.deepEqual([opened.key, opened.heading], ['new', 'New since you looked']);
+  assert.deepEqual([touched.key, touched.heading, touched.label], ['updated', 'Updated since you looked', 'updated 2d ago']);
+  assert.equal(before.key, 'waiting', 'changed before your last look is not new');
+  assert.equal(prState(statePr(4, { updatedAt: hoursAgo(48) }), ME, { now: NOW }).key, 'waiting', 'first visit: 24 hours');
+
+  const dir = await mkdtemp(join(tmpdir(), 'picker-looked-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const statePath = join(dir, 'picker.json');
+  const adapters = { findClone: async () => {}, viewer: async () => ME, listOpenPrs: async () => [statePr(5, { updatedAt: hoursAgo(30) })], reviewCommit: async () => null };
+  const visit = async (now) => {
+    const term = fakeTerminal();
+    const url = choosePr('acme/widget', adapters, { ...term, statePath, now, live: false, reporter: { start() {}, finish() {} } });
+    term.press('q');
+    await url;
+    return term.text();
+  };
+  // First visit 12h ago, 18h after the update: within 24 hours, so Updated.
+  assert.match(await visit(NOW - 12 * 3_600_000), /Updated\n/);
+  // Second visit now: the update came before the last look, so it waits.
+  const second = await visit(NOW);
+  assert.doesNotMatch(second, /Updated/);
+  assert.match(second, /Waiting/);
+  assert.match(second, /last looked 12h ago/);
+  const { readFile } = await import('node:fs/promises');
+  assert.equal(JSON.parse(await readFile(statePath, 'utf8')).lastLooked['acme/widget'], new Date(NOW).toISOString());
+});
+
+test('the label is coloured by age and the icon by state; headings take the state colour', async () => {
+  const { ageColor, pickerRows } = await import('../src/select.mjs');
+  const DAYMS = 24 * 3_600_000;
+  assert.deepEqual([ageColor(3_600_000), ageColor(3 * DAYMS), ageColor(9 * DAYMS), ageColor(20 * DAYMS), ageColor(null)], ['green', null, 'yellow', 'red', null]);
+  const { prs } = await candidatePrs([statePr(6, { updatedAt: hoursAgo(24 * 20) })], ME, { now: NOW });
+  const { rows } = pickerRows(prs, 70, { color: true });
+  const line = rows.find((row) => typeof row === 'string');
+  assert.match(line, /\x1b\[31m\s*idle 20d\x1b\[39m$/, 'a 20-day-old PR has a red label');
+  assert.doesNotMatch(line, /\x1b\[2m/, 'old PRs are not dimmed: they should stand out');
+  assert.deepEqual(rows[0], { heading: 'Waiting', color: null });
 });

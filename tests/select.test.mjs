@@ -161,16 +161,18 @@ test('each PR gets one state, first match wins', async () => {
   const newer = { count: 2, last: hoursAgo(2) };
   const asked = statePr(2, { createdAt: hoursAgo(1), reviewRequests: [{ login: ME }] });
   const cases = [
-    [prState(statePr(1), ME, { mine: { state: 'CHANGES_REQUESTED' }, covered: older.slice(0, 7), newer, now: NOW }), 'fixes', '2 new commits · 2h'],
+    [prState(statePr(1), ME, { mine: { state: 'CHANGES_REQUESTED' }, covered: older.slice(0, 7), newer, now: NOW }), 'fixes', '2 new commits'],
     [prState(statePr(1), ME, { mine: { state: 'APPROVED' }, covered: older, newer, now: NOW }), 'approved', 'approved · 2 new commits'],
-    [prState(asked, ME, { now: NOW }), 'requested', 'requested · 3d'],
-    [prState(statePr(3, { createdAt: hoursAgo(0.5) }), ME, { now: NOW }), 'new', 'opened 30m ago'],
-    [prState(statePr(4, { updatedAt: hoursAgo(3) }), ME, { now: NOW }), 'updated', 'updated 3h ago'],
-    [prState(statePr(5), ME, { now: NOW }), 'waiting', '3d'],
-    [prState(statePr(6, { updatedAt: hoursAgo(24 * 23) }), ME, { now: NOW }), 'stale', 'idle 23d'],
+    [prState(asked, ME, { now: NOW }), 'requested', 'requested'],
+    [prState(statePr(3, { createdAt: hoursAgo(0.5) }), ME, { now: NOW }), 'new', ''],
+    [prState(statePr(4, { updatedAt: hoursAgo(3) }), ME, { now: NOW }), 'updated', ''],
+    [prState(statePr(5), ME, { now: NOW }), 'waiting', ''],
+    [prState(statePr(6, { updatedAt: hoursAgo(24 * 23) }), ME, { now: NOW }), 'stale', 'idle'],
     [prState(statePr(7, { createdAt: undefined, updatedAt: undefined }), ME, { now: NOW }), 'waiting', ''],
   ];
   for (const [state, key, label] of cases) assert.deepEqual([state.key, state.label], [key, label]);
+  // The age column comes from ageMs: 30 minutes for the new PR, 3 hours for the updated one.
+  assert.deepEqual([cases[3][0].ageMs, cases[4][0].ageMs], [30 * 60_000, 3 * 3_600_000]);
   assert.equal(prState(statePr(8, { updatedAt: hoursAgo(24 * 13) }), ME, { now: NOW }).key, 'waiting', 'stale starts at 14 days');
 });
 
@@ -180,18 +182,25 @@ test('a re-requested review is listed even when you reviewed the current head', 
   assert.deepEqual([prs.map((pr) => pr.state.key), hidden.reviewed], [['requested'], 0]);
 });
 
-test('rows show the state icon and a right-aligned label; colour off keeps the meaning', async () => {
+test('the age sits right after the number, details follow the titles, and rows stay narrow', async () => {
   const { pickerRows } = await import('../src/select.mjs');
-  const { prs } = await candidatePrs([statePr(5), statePr(3, { createdAt: hoursAgo(1) }), statePr(6, { updatedAt: hoursAgo(24 * 20) })], ME, { now: NOW });
-  const { rows, map } = pickerRows(prs, 70);
-  assert.deepEqual(rows.filter((row) => typeof row === 'object').map((row) => row.heading), ['New', 'Waiting']);
-  assert.deepEqual(map.map((pr) => pr?.number ?? null), [null, 3, null, 5, 6]);
+  const asked = statePr(2, { title: 'chore: a much longer title than the rest', reviewRequests: [{ login: ME }], updatedAt: hoursAgo(5) });
+  const { prs } = await candidatePrs([statePr(5), statePr(3, { createdAt: hoursAgo(1) }), statePr(6, { updatedAt: hoursAgo(24 * 20) }), asked], ME, { now: NOW });
+  const { rows, map } = pickerRows(prs, 200);
+  assert.deepEqual(rows.filter((row) => typeof row === 'object').map((row) => row.heading), ['Asked for you', 'New', 'Waiting']);
+  assert.deepEqual(map.map((pr) => pr?.number ?? null), [null, 2, null, 3, null, 5, 6]);
   const lines = rows.filter((row) => typeof row === 'string');
-  assert.match(lines[0], /^● #3  alice  PR 3 +opened 1h ago$/);
-  assert.match(lines[2], /^◌ #6  alice  PR 6 +idle 20d$/);
-  assert(lines.every((line) => line.length === lines[0].length && line.length <= 70), lines.join('\n'));
+  assert.equal(lines[0], '★ #2  5h   alice  chore: a much longer title than the rest  requested');
+  assert.equal(lines[1], '● #3  1h   alice  PR 3');
+  assert.equal(lines[2], '· #5  3d   alice  PR 5');
+  assert.equal(lines[3], '◌ #6  20d  alice  PR 6                                      idle');
+  // A wide terminal doesn't push the details to its right edge.
+  assert(lines.every((line) => line.length <= 100), lines.join('\n'));
+  const narrow = pickerRows(prs, 50).rows.filter((row) => typeof row === 'string');
+  assert(narrow.every((line) => line.length <= 50), narrow.join('\n'));
+  assert.match(narrow[0], /^★ #2  5h   alice  chore: a much longer…  requested$/);
   const skipped = pickerRows(prs, 70, { skipped: (pr) => pr.number === 5 }).rows.find((row) => typeof row === 'string' && row.includes('#5'));
-  assert.match(skipped, /skipped · 3d$/);
+  assert.match(skipped, /^· #5  3d   alice  PR 5 +skipped$/);
 });
 
 test('the cursor skips group headings', async () => {
@@ -222,7 +231,7 @@ test('s skips a PR until its head changes, a shows skipped PRs again', async (t)
   assert.equal((await run('return')).url, 'https://github.com/acme/widget/pull/43', 'still skipped next time');
   const shown = await run('a', 'up', 'return'); // a keeps the cursor on #43; #42 reappears above it
   assert.equal(shown.url, 'https://github.com/acme/widget/pull/42');
-  assert.match(shown.text, /skipped · 3d/);
+  assert.match(shown.text, /#42 .* skipped$/m);
   open = [statePr(42, { headRefOid: 'd'.repeat(40) }), statePr(43)];
   assert.equal((await run('return')).url, 'https://github.com/acme/widget/pull/42', 'a new commit ends the skip');
   assert.deepEqual(JSON.parse(await readFile(statePath, 'utf8')).skipped, {}, 'an ended skip is pruned when the visit is saved');
@@ -236,11 +245,11 @@ test('new commits are counted only for PRs that changed since your review', asyn
     commitsSince: async (number, base, head) => { calls.push([number, base, head.slice(0, 1)]); return { count: 3, last: hoursAgo(2) }; },
   });
   assert.deepEqual(calls, [[1, 'a7e50c8', 'e']]);
-  assert.equal(prs[0].state.label, '3 new commits · 2h');
+  assert.deepEqual([prs[0].state.label, prs[0].state.ageMs], ['3 new commits', 2 * 3_600_000]);
   const failing = await candidatePrs([changed], ME, { now: NOW, commitsSince: async () => { throw new Error('rate limited'); } });
-  assert.equal(failing.prs[0].state.label, 'new commits · 3d', 'a failed count still lists the PR');
+  assert.equal(failing.prs[0].state.label, 'new commits', 'a failed count still lists the PR');
   const plain = await candidatePrs([changed], ME, { now: NOW, commitsSince: () => null });
-  assert.equal(plain.prs[0].state.label, 'new commits · 3d', 'a counter that returns a plain null works too');
+  assert.equal(plain.prs[0].state.label, 'new commits', 'a counter that returns a plain null works too');
 });
 
 test('New and Updated mean since you last looked, and the visit is remembered', async (t) => {
@@ -250,7 +259,7 @@ test('New and Updated mean since you last looked, and the visit is remembered', 
   const touched = prState(statePr(2, { updatedAt: hoursAgo(60) }), ME, { now: NOW, seenAt });
   const before = prState(statePr(3, { updatedAt: hoursAgo(24 * 4) }), ME, { now: NOW, seenAt });
   assert.deepEqual([opened.key, opened.heading], ['new', 'New since you looked']);
-  assert.deepEqual([touched.key, touched.heading, touched.label], ['updated', 'Updated since you looked', 'updated 2d ago']);
+  assert.deepEqual([touched.key, touched.heading, touched.ageMs], ['updated', 'Updated since you looked', 60 * 3_600_000]);
   assert.equal(before.key, 'waiting', 'changed before your last look is not new');
   assert.equal(prState(statePr(4, { updatedAt: hoursAgo(48) }), ME, { now: NOW }).key, 'waiting', 'first visit: 24 hours');
 
@@ -276,14 +285,14 @@ test('New and Updated mean since you last looked, and the visit is remembered', 
   assert.equal(JSON.parse(await readFile(statePath, 'utf8')).lastLooked['acme/widget'], new Date(NOW).toISOString());
 });
 
-test('the label is coloured by age and the icon by state; headings take the state colour', async () => {
+test('the age column is coloured by age and the icon by state; headings take the state colour', async () => {
   const { ageColor, pickerRows } = await import('../src/select.mjs');
   const DAYMS = 24 * 3_600_000;
   assert.deepEqual([ageColor(3_600_000), ageColor(3 * DAYMS), ageColor(9 * DAYMS), ageColor(20 * DAYMS), ageColor(null)], ['green', null, 'yellow', 'red', null]);
   const { prs } = await candidatePrs([statePr(6, { updatedAt: hoursAgo(24 * 20) })], ME, { now: NOW });
   const { rows } = pickerRows(prs, 70, { color: true });
   const line = rows.find((row) => typeof row === 'string');
-  assert.match(line, /\x1b\[31m\s*idle 20d\x1b\[39m$/, 'a 20-day-old PR has a red label');
+  assert.match(line, /^◌ #6  \x1b\[31m20d  \x1b\[39m/, 'a 20-day-old PR has a red age');
   assert.doesNotMatch(line, /\x1b\[2m/, 'old PRs are not dimmed: they should stand out');
   assert.deepEqual(rows[0], { heading: 'Waiting', color: null });
 });

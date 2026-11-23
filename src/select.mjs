@@ -80,7 +80,6 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
   const sinceLooked = Number.isFinite(seenAt);
   // Milliseconds since a timestamp, or null when it's missing: unknown is never "new".
   const since = (iso) => { const time = Date.parse(iso ?? ''); return Number.isNaN(time) ? null : now - time; };
-  const ago = (iso) => (since(iso) === null ? '' : age(since(iso)));
   const within = (iso, ms) => since(iso) !== null && since(iso) < ms;
   // New or changed: after your last look, or in the last 24 hours on a first visit.
   const fresh = (iso) => (sinceLooked ? Date.parse(iso ?? '') > seenAt : within(iso, DAY));
@@ -98,13 +97,15 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
     // `review` and `commits` tell watch which review type the pushes came after.
     const pushed = { review: mine.state, commits: newer?.count ?? null };
     if (mine.state === 'APPROVED') return { ...at('approved', newer?.last ?? pr.updatedAt), ...pushed, label: `approved · ${what}` };
-    return { ...at('fixes', newer?.last ?? pr.updatedAt), ...pushed, label: [what, ago(newer?.last ?? pr.updatedAt)].filter(Boolean).join(' · ') };
+    return { ...at('fixes', newer?.last ?? pr.updatedAt), ...pushed, label: what };
   }
-  if (isRequested(pr, viewer)) return { ...at('requested', pr.updatedAt), label: ['requested', ago(pr.updatedAt)].filter(Boolean).join(' · ') };
-  if (fresh(pr.createdAt)) return { ...at('new', pr.createdAt), label: `opened ${ago(pr.createdAt)} ago` };
-  if (fresh(pr.updatedAt)) return { ...at('updated', pr.updatedAt), label: `updated ${ago(pr.updatedAt)} ago` };
-  if (since(pr.updatedAt) >= STALE_DAYS * DAY) return { ...at('stale', pr.updatedAt), label: `idle ${Math.floor(since(pr.updatedAt) / DAY)}d` };
-  return { ...at('waiting', pr.updatedAt), label: ago(pr.updatedAt) };
+  // The age is its own column (formatRows), so labels only add what the
+  // group heading doesn't already say.
+  if (isRequested(pr, viewer)) return { ...at('requested', pr.updatedAt), label: 'requested' };
+  if (fresh(pr.createdAt)) return { ...at('new', pr.createdAt), label: '' };
+  if (fresh(pr.updatedAt)) return { ...at('updated', pr.updatedAt), label: '' };
+  if (since(pr.updatedAt) >= STALE_DAYS * DAY) return { ...at('stale', pr.updatedAt), label: 'idle' };
+  return { ...at('waiting', pr.updatedAt), label: '' };
 }
 
 // Keeps the PRs worth reviewing, each with its state: no review from you yet,
@@ -144,22 +145,38 @@ export function hiddenSummary({ hidden, open }) {
 }
 
 // "#61  author  title", with numbers and authors aligned across the list. A PR
-// with a state also gets its icon in front, in the state's colour, and its
-// label right-aligned, coloured by age. Skipped rows are dimmed whole.
+// with a state gets its icon in front, in the state's colour, and the age of
+// its activity right after the number, coloured by age, so the time sits next
+// to the PR it belongs to. A label with more detail ("3 new commits") follows
+// the titles, not the terminal's right edge, and rows are at most MAX_WIDTH
+// wide. Skipped rows are dimmed whole.
+const MAX_WIDTH = 100;
 export function formatRows(prs, width = 100, { color = false } = {}) {
   const c = palette(color);
   const numberWidth = Math.max(0, ...prs.map((pr) => String(pr.number).length)) + 1;
   const authorWidth = Math.min(28, Math.max(0, ...prs.map((pr) => (pr.author?.login ?? '').length)));
+  const author = (pr) => short(pr.author?.login ?? '', authorWidth).padEnd(authorWidth);
+  const number = (pr) => `#${pr.number}`.padEnd(numberWidth);
+  if (!prs.some((pr) => pr.state)) {
+    return prs.map((pr) => {
+      const head = `${number(pr)}  ${author(pr)}  `;
+      return head + short(pr.title ?? '', Math.max(10, width - head.length - 4));
+    });
+  }
+  const ageOf = (pr) => (Number.isFinite(pr.state?.ageMs) ? age(pr.state.ageMs) : '');
+  const ageWidth = Math.max(0, ...prs.map((pr) => ageOf(pr).length));
   const labelWidth = Math.max(0, ...prs.map((pr) => (pr.state?.label ?? '').length));
+  const headWidth = 2 + numberWidth + 2 + (ageWidth ? ageWidth + 2 : 0) + authorWidth + 2;
+  const room = Math.min(width, MAX_WIDTH) - headWidth - (labelWidth ? labelWidth + 2 : 0);
+  const titleWidth = Math.max(10, Math.min(room, Math.max(0, ...prs.map((pr) => (pr.title ?? '').length))));
   return prs.map((pr) => {
-    const head = `${`#${pr.number}`.padEnd(numberWidth)}  ${short(pr.author?.login ?? '', authorWidth).padEnd(authorWidth)}  `;
-    if (!pr.state) return head + short(pr.title ?? '', Math.max(10, width - head.length - 4));
-    const titleWidth = Math.max(10, width - head.length - labelWidth - 8);
-    const text = `${short(pr.title ?? '', titleWidth).padEnd(titleWidth)}  `;
-    if (pr.state.dim) return c.dim(`${pr.state.icon} ${head}${text}${pr.state.label.padStart(labelWidth)}`);
+    const state = pr.state ?? { icon: ' ', label: '' };
+    const when = ageWidth ? `${ageOf(pr).padEnd(ageWidth)}  ` : '';
+    const title = short(pr.title ?? '', titleWidth);
+    const tail = state.label ? `${title.padEnd(titleWidth)}  ${state.label}` : title;
+    if (state.dim) return c.dim(`${state.icon} ${number(pr)}  ${when}${author(pr)}  ${tail}`);
     const paint = (name, part) => (name ? c[name](part) : part);
-    const label = pr.state.label.padStart(labelWidth);
-    return `${paint(pr.state.color, pr.state.icon)} ${head}${text}${paint(ageColor(pr.state.ageMs), label)}`;
+    return `${paint(state.color, state.icon)} ${number(pr)}  ${paint(ageColor(state.ageMs), when)}${author(pr)}  ${tail}`;
   });
 }
 
@@ -256,8 +273,8 @@ export function pickFromList(title, rows, { input = process.stdin, output = proc
 // Returns the rows and, per row, the PR it stands for (null for a heading).
 export function pickerRows(prs, width, { color = false, skipped = () => false, marked = () => false } = {}) {
   const shown = prs.map((pr) => (skipped(pr)
-    ? { ...pr, state: { ...pr.state, label: `skipped · ${pr.state.label}`, dim: true } }
-    : marked(pr) ? { ...pr, state: { ...pr.state, label: `• ${pr.state.label}` } } : pr));
+    ? { ...pr, state: { ...pr.state, label: ['skipped', pr.state.label].filter(Boolean).join(' · '), dim: true } }
+    : marked(pr) ? { ...pr, state: { ...pr.state, label: ['•', pr.state.label].filter(Boolean).join(' ') } } : pr));
   const lines = formatRows(shown, width, { color });
   const rows = [];
   const map = [];

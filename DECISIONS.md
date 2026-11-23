@@ -222,7 +222,7 @@ Each entry has three parts:
   | Confirmed findings | Verdict | Recommended review |
   |---|---|---|
   | any Must fix | 🔴 Fix before merge | Request changes |
-  | any Should fix | ⚠️ Changes recommended | Request changes |
+  | any Should fix | ⚠️ Changes recommended | Comment only |
   | only Questions, Minor or none | ✅ Ship | Approve |
 
   The counts on the line ("4 should-fix, 1 question.") are computed in code too. Minor items are counted only in the `<details>` summary, so the two numbers can't disagree when the digest merges related minor lines; with only minor items the line says "Only minor items." The `<details>` summary is counted in code too: every Minor, plus the Should fix items and Questions that didn't fit the five visible slots (verify's count minus the numbered 🟡 and ❓ entries shown), for example "1 question and 5 minor items". A run once said "2 questions" in the verdict but showed one, because the model's summary counted the folded question as a minor item. When the person approves over open should-fix items or questions, the line becomes "✅ Ship. 1 should-fix, 1 question, none blocking." so the posted comment matches the decision without an edit.
@@ -230,6 +230,7 @@ Each entry has three parts:
   - An earlier rule, "✅ Ship unless there is a Must fix", produced "✅ Ship" above four Should fix items and recommended Approve. The person had to override it by hand.
   - With the line written by the model there were two sources of truth; now there is one.
   - Open questions don't block an approval (user decision).
+  - Should fix doesn't block a merge, so ⚠️ recommends Comment only. A Haiku run once gave Should fix to a test nit and recommended Request changes on a correct PR. A priority one level too high should cost a comment, not a blocked PR (user decision).
 - **Don't:**
   - Let the skill write the verdict again.
   - Bring back 🛑 **Blocked** or any other judgment-based tier.
@@ -258,6 +259,7 @@ Each entry has three parts:
   - The terminal then shows verify's decisions and the digest preview, and offers **Keep it local** (the default, and what Enter does), **Post it as a review on the PR**, or **Edit the digest first**. An edit is saved to the digest file.
   - Choosing Post re-reads the PR's live state, then asks for the review type, with the recommendation marked "(recommended)" and preselected:
     - **Request changes** when verify confirmed a Must fix;
+    - **Comment only** when the worst is a Should fix;
     - otherwise **Approve**.
   - Only **Comment only** is offered when the PR has commits newer than the reviewed head, since an Approve would cover unreviewed code, or when it's the person's own PR, which GitHub doesn't let them approve. Closed and merged PRs can't be posted to.
   - **Own PR:** the person isn't a reviewer there, so the code-decided verdict is kept as a recommendation and marked `**Verdict:** Self-review: ✅ Ship. …`. It is not rewritten to "Not approved yet" as it is for a comment on someone else's PR (`alignVerdict(…, { own: true })`).
@@ -333,16 +335,20 @@ Each entry has three parts:
     Any review type counts.
   - **Hidden:** other people's drafts and bot PRs.
   - **States and order:** each PR gets one state, first match wins, shown with an icon, a colour and a label, and grouped under a heading in this order:
-    1. **⟳ Fixes pushed:** your latest review was Request changes or Comment, and there are commits after it ("3 new commits · 2h"). The count comes from one `gh api repos/<repo>/compare/<reviewed>...<head>` call per changed PR, not from `gh pr list --json commits`: asking for every PR's commits exceeded GitHub's 500,000-node query limit on a real repository. If the count fails, the PR is still listed, as "new commits".
+    1. **⟳ Fixes pushed:** your latest review was Request changes or Comment, and there are commits after it ("3 new commits", aged by the last one). The count comes from one `gh api repos/<repo>/compare/<reviewed>...<head>` call per changed PR, not from `gh pr list --json commits`: asking for every PR's commits exceeded GitHub's 500,000-node query limit on a real repository. If the count fails, the PR is still listed, as "new commits".
     2. **★ Asked for you:** you're in `reviewRequests`.
     3. **● New since you looked:** created after your last visit to the picker for this repository; on a first visit, in the last 24 h.
     4. **↑ Updated since you looked:** updated after your last visit (first visit: 24 h).
     5. **↑ Approved, new commits:** you approved and commits came in after ("approved · 2 new commits").
-    6. **Waiting:** the rest, with **◌** for 14 days or more without an update ("idle 23d").
+    6. **Waiting:** the rest, with **◌** for 14 days or more without an update (labelled `idle`, with the age in red).
     7. **◆ Your PRs:** your own open PRs, drafts included, listed for a self-review. Your own reviews on them are ignored, so they're never hidden or shown as "fixes pushed". The label counts other people's latest reviews, leaving out bots and Copilot, and adds `conflicts` when `mergeable` is `CONFLICTING` ("1 approval · conflicts", or "no reviews yet"). The header counts them separately ("6 to review, 1 yours").
 
     Within a group, the most recent activity comes first. A missing date counts as unknown, never as new.
-  - **Colours:** the icon and the group heading take the state's colour; the label is coloured by the age of the activity it names (green under a day, plain up to a week, yellow from a week, red from 14 days). Only skipped rows are dimmed.
+  - **Row layout:** `icon #number age author title  label`.
+    - The age column comes right after the number: the creation time for New, the update time for Updated, the last new commit for Fixes pushed. It's coloured by age: green under a day, plain up to a week, yellow from a week, red from 14 days.
+    - Labels hold only what the heading doesn't say (`3 new commits`, `requested`, `idle`, `approved · 2 new commits`, your PR's reviews). They follow the longest title.
+    - Rows are at most 100 columns wide.
+  - **Colours:** the icon and the group heading take the state's colour. Only skipped rows are dimmed.
   - **Last looked:** `state/picker.json` records when you last opened the picker per repository, written when the list loads, so a cancelled pick still counts as a look.
   - **Skip:** `s` hides a PR until its head commit changes, and `a` shows skipped PRs. The skip list is `state/picker.json`, which is git-ignored and keyed by `owner/repo#number` with the head at skip time. Skips that have ended are pruned when the list is saved.
 - **How the reviewed commit is found:** `gh pr list` leaves review commits empty. Our posted footer names the commit ("Reviewed at `<sha>`", or the older "pr-review at `<sha>`"), so it's read from there for free. Only reviews without that footer cost one `gh api …/pulls/<n>/reviews` call (`commit_id`). If no commit can be found, the PR is listed: showing too much is safer than hiding.
@@ -352,6 +358,7 @@ Each entry has three parts:
   - **Own PRs are listed:** a self-review before asking others is useful, and drafts are when it's most useful.
   - **Colour is never the only signal:** the icon and label carry the state with `NO_COLOR` or in a pipe.
   - **Fixes pushed comes first:** a PR where you asked for changes and the author answered is the most likely to need you next.
+  - **The age sits next to the number:** right-aligned to the terminal edge, the age ended up far from its title on a wide terminal and went unnoticed.
   - **Old PRs stand out instead of fading:** the first version dimmed stale rows, which hid exactly the PRs that had sat untouched. A red age label makes them visible.
   - **"Since you looked" beats a fixed window:** with a 24-hour window, a list checked after a weekend showed nothing as new, while a list checked twice an hour showed the same PRs as new both times.
   - **Skip is local and ends on its own:** it must never write to GitHub, and a new commit is exactly when a skipped PR deserves another look.

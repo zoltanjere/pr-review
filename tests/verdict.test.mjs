@@ -9,7 +9,7 @@ test('the verdict has three levels decided by the highest confirmed priority', (
   const four = [1, 2, 3, 4].map(() => f('Confirmed', 'Should fix'));
   assert.deepEqual(
     [verdictFor([...four, f('Question'), f('Confirmed', 'Minor'), f('Rejected')]).line, verdictFor(four).event],
-    ['**Verdict:** ⚠️ Changes recommended. 4 should-fix, 1 question.', 'request-changes'],
+    ['**Verdict:** ⚠️ Changes recommended. 4 should-fix, 1 question.', 'comment'],
   );
   assert.deepEqual([verdictFor([f('Question'), f('Question')]).line, verdictFor([f('Question')]).event],
     ['**Verdict:** ✅ Ship. 2 questions.', 'approve']);

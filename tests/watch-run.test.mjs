@@ -168,14 +168,14 @@ test('the app refreshes in place, marks a new PR until the cursor reaches it, an
   run.tick();
   await until(() => run.term.text().includes('#2'));
   assert.deepEqual(run.sent, ['● #2 new PR from alice']);
-  assert.match(run.term.text(), /#2 .*• /);
+  assert.match(run.term.text(), /#2 .*•$/m);
   assert.match(run.term.text(), /checked 1m ago/);
   // #1 stays highlighted after the refresh; moving onto #2 clears its mark.
   assert.match(run.term.text().split('acme/widget:').at(-1), /❯ · #1/);
   run.term.clear();
   run.term.press('up');
   await until(() => run.term.text().includes('❯ ↑ #2'));
-  assert.doesNotMatch(run.term.text().split('acme/widget:').at(-1), /• /);
+  assert.doesNotMatch(run.term.text().split('acme/widget:').at(-1), /•/);
   run.term.press('r');
   await until(() => run.adapters.calls.filter((call) => call === 'list').length === 3);
   run.term.press('q');

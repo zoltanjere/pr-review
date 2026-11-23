@@ -3,7 +3,9 @@
 
 const LEVELS = {
   block: { icon: '🔴', label: 'Fix before merge', event: 'request-changes' },
-  changes: { icon: '⚠️', label: 'Changes recommended', event: 'request-changes' },
+  // Should fix doesn't block, so it recommends a comment: a priority one level
+  // too high then costs a non-blocking comment, not a blocked PR.
+  changes: { icon: '⚠️', label: 'Changes recommended', event: 'comment' },
   ship: { icon: '✅', label: 'Ship', event: 'approve' },
   comment: { icon: '💬', label: 'Not approved yet', event: 'comment' },
 };

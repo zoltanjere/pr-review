@@ -2,10 +2,16 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## Unreleased
+
+- **⚠️ recommends Comment only:** with Should fix as the worst finding, posting preselects Comment only, not Request changes. Only a Must fix recommends Request changes.
+- **Questions don't assert:** verify no longer backs a Question with language or runtime internals it can't show in the repository, and rejects a Question the PR body already asks for.
+
 ## 0.9.0 (2026-11-23)
 
 - **`reviewpr watch`:** macOS notifications for the events listed in `config.json` (`new`, `fixes-after-changes`, `reviewed-updated`, `merged-reviewed`, `merged`, `review-requested`, `my-pr-reviewed`, `my-pr-conflicts`, or `all`, the default). It polls with read-only `gh` calls and uses no model.
 - **Background mode:** `watch --install` adds a launchd agent that runs `watch --once` every `intervalMinutes`; `--uninstall` removes it.
+- **Picker rows:** the age is a column right after the PR number (`● #68  10m  octo-dev  feat: …`), and details follow the titles instead of the terminal's right edge. Rows are at most 100 columns wide.
 - **Terminal mode:** `watch` keeps the picker open and refreshes it in place. Enter reviews in the same terminal and returns to the list, and `r` checks immediately. Merges and events on your own PRs show on a status line.
 
 ## 0.8.1 (2026-11-23)

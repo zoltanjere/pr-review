@@ -120,18 +120,18 @@ Use model IDs exactly as Copilot's `/model` lists them.
 ```
 acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
   Fixes pushed
-❯ ⟳ #61  octo-dev   fix: resume uploads after a dropped connection      3 new commits · 2h
+❯ ⟳ #61  2h   octo-dev   fix: resume uploads after a dropped connection  3 new commits
   Asked for you
-  ★ #66  lee-park   chore: bump the test runner to the latest minor         requested · 5h
-  New
-  ● #68  octo-dev   feat: show upload progress in the status bar            opened 42m ago
-  Updated
-  ↑ #52  ana-dev    refactor: split the queue worker                        updated 3h ago
+  ★ #66  5h   lee-park   chore: bump the test runner                     requested
+  New since you looked
+  ● #68  10m  octo-dev   feat: show upload progress in the status bar
+  Updated since you looked
+  ↑ #52  3h   ana-dev    refactor: split the queue worker
   Waiting
-  · #49  sam-codes  docs: explain chunk sizes                                           4d
-  ◌ #31  lee-park   feat: offline mode                                            idle 23d
+  · #49  4d   sam-codes  docs: explain chunk sizes
+  ◌ #31  23d  lee-park   feat: offline mode                              idle
   Your PRs
-  ◆ #70  me         feat: retry budget per tenant             1 approval · conflicts
+  ◆ #70  1d   me         feat: retry budget per tenant                   1 approval · conflicts
 ```
 
 - **Groups, most urgent first:**
@@ -143,7 +143,10 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
   - **◆ Your PRs:** your own open PRs, drafts included, for a self-review.
     - The label shows what others did (`2 approvals · 1 change request · conflicts`), and your own comments never mark them as reviewed.
     - GitHub doesn't let you approve or request changes on your own PR, so a self-review posts as a comment. Its verdict line reads `Self-review: ✅ Ship.` or `Self-review: 🔴 Fix before merge.`.
-- **Colours:** the icon and the group heading carry the state's colour. The label on the right is coloured by age: green under a day, plain up to a week, yellow from a week, red from two weeks. Without colour, the icons and labels carry the same information.
+- **Age:** the column after the PR number says how long ago its activity was: opened for New, updated for Updated, the last new commit for Fixes pushed.
+  - It's coloured green under a day, plain up to a week, yellow from a week and red from two weeks.
+  - Details such as `3 new commits` follow the titles, and rows are at most 100 columns wide, so nothing drifts to the far edge of a wide terminal.
+- **Colours:** the icon and the group heading carry the state's colour. Without colour, the icons, ages and labels carry the same information.
 - **Hidden:** other people's drafts and bot PRs.
 - **Keys:** `↑`/`↓` move, Enter reviews, and `q` cancels. `s` skips the highlighted PR until its author pushes a new commit, and `a` shows skipped PRs again (press `s` on one to unskip it).
 - **Where this is kept:** skips and the time you last looked live in `state/picker.json` on your machine only, which is git-ignored. Nothing is written to GitHub.
@@ -219,7 +222,7 @@ What next?
   Edit the digest first
 ```
 
-- **Posting** asks for the review type, with the one matching the verdict preselected: Request changes for 🔴 and ⚠️, Approve for ✅.
+- **Posting** asks for the review type, with the one matching the verdict preselected: Request changes for 🔴, Comment only for ⚠️, Approve for ✅.
 - **Overriding:** if you pick a type that contradicts the verdict, the verdict line is rewritten to match.
 - **New commits or your own PR:** only Comment is offered.
 - **How it posts:** one `gh pr review` as you, with a footer naming the reviewed commit.

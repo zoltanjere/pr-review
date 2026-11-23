@@ -16,7 +16,7 @@ test('approve is recommended only without a must-fix or should-fix', () => {
     { allowed: ['approve', 'comment', 'request-changes'], recommended: 'approve', notes: [], level: 'ship' });
   assert.equal(reviewOptions({ findings: mustFix, reviewedHead: HEAD, status: open() }).recommended, 'request-changes');
   const shouldFix = [{ title: 'Gap', status: 'Confirmed', priority: 'Should fix' }];
-  assert.equal(reviewOptions({ findings: shouldFix, reviewedHead: HEAD, status: open() }).recommended, 'request-changes');
+  assert.equal(reviewOptions({ findings: shouldFix, reviewedHead: HEAD, status: open() }).recommended, 'comment');
   const questions = [{ title: 'Why?', status: 'Question', priority: '-' }];
   assert.equal(reviewOptions({ findings: questions, reviewedHead: HEAD, status: open() }).recommended, 'approve');
 });
@@ -106,7 +106,7 @@ test('posting preselects the recommended review type and marks it', async (t) =>
   const changes = await session(t, [1, 'default'], {
     findings: [{ title: 'Gap', status: 'Confirmed', priority: 'Should fix' }], digest: '**Verdict:** ⚠️ Changes recommended. 1 should-fix.',
   });
-  assert.equal(changes.menus[1].initial, 2);
+  assert.equal(changes.menus[1].initial, 1);
 });
 
 test('a non-recommended type can be chosen, and the verdict line follows the choice', async (t) => {

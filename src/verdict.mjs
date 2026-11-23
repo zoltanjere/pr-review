@@ -68,7 +68,16 @@ export function detailsSummary(body, findings = []) {
 }
 
 // Rewrites the verdict line when it contradicts the review type the person chose.
-export function alignVerdict(digest, event) {
+// On your own PR the only review type is a comment and you aren't a reviewer,
+// so the code-decided verdict stays as a recommendation, marked "Self-review:".
+const SELF = 'Self-review: ';
+export function alignVerdict(digest, event, { own = false } = {}) {
+  if (own) {
+    const old = VERDICT_LINE.exec(digest)?.[0];
+    if (!old || old.includes(SELF)) return { digest, changed: false };
+    const line = old.replace(/^(\s*\*\*Verdict:\*\*\s*)/, `$1${SELF}`).trimEnd();
+    return { digest: digest.replace(VERDICT_LINE, `${line}\n`), changed: true, line };
+  }
   const current = verdictFromText(digest);
   const target = event === 'approve' ? (current?.level === 'ship' ? null : 'ship')
     : current?.level === 'ship' || !current ? (event === 'request-changes' ? 'changes' : event === 'comment' ? 'comment' : null)

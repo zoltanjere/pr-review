@@ -87,7 +87,7 @@ reviewpr --yes <url>             # no prompts, never posts; the digest goes to s
 The picker lists open PRs you haven't reviewed yet, plus ones with new commits since your review, grouped by what needs you most:
 
 ```
-acme/widget: 6 to review, 1 skipped (8 open; hidden: 1 draft)
+acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
   Fixes pushed
 ❯ ⟳ #61  octo-dev   fix: resume uploads after a dropped connection      3 new commits · 2h
   Asked for you
@@ -99,6 +99,8 @@ acme/widget: 6 to review, 1 skipped (8 open; hidden: 1 draft)
   Waiting
   · #49  sam-codes  docs: explain chunk sizes                                           4d
   ◌ #31  lee-park   feat: offline mode                                            idle 23d
+  Your PRs
+  ◆ #70  me         feat: retry budget per tenant             1 approval · conflicts
 ```
 
 - **Groups, most urgent first:**
@@ -107,8 +109,9 @@ acme/widget: 6 to review, 1 skipped (8 open; hidden: 1 draft)
   - **● New since you looked / ↑ Updated since you looked:** opened or updated since you last opened the picker for this repository (on a first visit: the last 24 h). The header says when that was: `last looked 2d ago`.
   - **↑ Approved, new commits:** you approved, and commits came in after.
   - **Waiting:** the rest. **◌** marks PRs idle for 14 days or more.
+  - **◆ Your PRs:** your own open PRs, drafts included, for a self-review. The label shows what others did (`2 approvals · 1 change request · conflicts`). Your own comments never mark them as reviewed. GitHub doesn't let you approve or request changes on your own PR, so a self-review posts as a comment, and its verdict line reads `Self-review: ✅ Ship.` or `Self-review: 🔴 Fix before merge.`.
 - **Colours:** the icon and the group heading carry the state's colour. The label on the right is coloured by age: green under a day, plain up to a week, yellow from a week, red from two weeks, so a PR nobody touched stands out. Without colour, the icons and labels carry the same information.
-- **Hidden:** drafts, bot PRs and your own PRs.
+- **Hidden:** other people's drafts and bot PRs.
 - **Keys:** `↑`/`↓` move, Enter reviews, and `q` cancels. `s` skips the highlighted PR until its author pushes a new commit, and `a` shows skipped PRs again (press `s` on one to unskip it).
 - **Where this is kept:** skips and the time you last looked live in `state/picker.json` on your machine only, which is git-ignored. Nothing is written to GitHub.
 

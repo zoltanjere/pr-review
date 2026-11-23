@@ -114,11 +114,12 @@ export async function publishInTerminal(result, { adapters, input = process.stdi
     if (event === 'cancel') return keptLocal();
     // The person's choice wins: a verdict line that contradicts it is rewritten,
     // and the saved digest matches what is posted.
-    const aligned = alignVerdict(digest, event);
+    const own = Boolean(status.author) && status.author === status.viewer;
+    const aligned = alignVerdict(digest, event, { own });
     if (aligned.changed) {
       digest = aligned.digest;
       await writeFile(result.digestPath, `${digest.trim()}\n`, { mode: 0o600 });
-      output.write(`${c.yellow('!')} Verdict line changed to match your choice: ${aligned.line}\n`);
+      output.write(`${c.yellow('!')} ${own ? 'Verdict line marked as a self-review' : 'Verdict line changed to match your choice'}: ${aligned.line}\n`);
     }
     await runSteps([{ title: `Posting review as ${EVENTS[event]}`, run: () => adapters.postReview(result.pr, event, reviewBody(digest, result.head)) }], { live, reporter });
     output.write(`${c.green('✔')} Posted to ${prName} as ${c.bold(EVENTS[event])}.\n`);

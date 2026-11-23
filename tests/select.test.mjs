@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { candidatePrs, choosePr, formatRows, hiddenSummary, pickFromList, reviewedHead } from '../src/select.mjs';
+import { candidatePrs, choosePr, formatRows, hiddenSummary, ownLabel, pickFromList, reviewedHead } from '../src/select.mjs';
 
 const ME = 'me';
 const HEAD = 'a7e50c828a1b2de30d5bec350ee37e1d368490ad';
@@ -36,11 +36,30 @@ test('only PRs that still need my review are listed, by state then newest first'
     pr(12, { latestReviews: [review('APPROVED', 'manual approval, commit unknown')] }),
   ], ME, { now: Date.parse('2026-11-30T10:00:00Z'), commitOf: async (number) => { lookups.push(number); return number === 11 ? HEAD : null; } });
   // #3 had changes requested at an older commit: fixes pushed, first. The rest wait, newest activity first.
-  assert.deepEqual(prs.map((item) => [item.number, item.state.key]), [[3, 'fixes'], [6, 'waiting'], [4, 'waiting'], [12, 'waiting'], [1, 'waiting']]);
-  assert.deepEqual(hidden, { reviewed: 3, draft: 1, yours: 1, bot: 1 });
+  // My own PR (#8) is listed last, under Your PRs.
+  assert.deepEqual(prs.map((item) => [item.number, item.state.key]), [[3, 'fixes'], [6, 'waiting'], [4, 'waiting'], [12, 'waiting'], [1, 'waiting'], [8, 'mine']]);
+  assert.deepEqual(hidden, { reviewed: 3, draft: 1, bot: 1 });
   assert.equal(open, 11);
   assert.deepEqual(lookups, [11, 12]);
-  assert.equal(hiddenSummary({ hidden, open }), '11 open; hidden: 3 reviewed, 1 draft, 1 yours, 1 bot');
+  assert.equal(hiddenSummary({ hidden, open }), '11 open; hidden: 3 reviewed, 1 draft, 1 bot');
+});
+
+test('my own PRs are listed for a self-review, drafts too, and my comments never hide them', async () => {
+  const mineReviewed = pr(8, { author: { login: ME }, latestReviews: [review('COMMENTED', 'Reviewed at `a7e50c8` with AI assistance.')] });
+  const { prs, hidden } = await candidatePrs([mineReviewed, pr(9, { author: { login: ME }, isDraft: true })], ME, { now: Date.parse('2026-11-30T10:00:00Z') });
+  assert.deepEqual(prs.map((item) => [item.number, item.state.key, item.state.heading, item.state.icon]), [[9, 'mine', 'Your PRs', '◆'], [8, 'mine', 'Your PRs', '◆']]);
+  assert.deepEqual(hidden, { reviewed: 0, draft: 0, bot: 0 });
+  assert.equal(prs[0].state.label, 'draft · no reviews yet');
+});
+
+test('my PR label counts other people\u2019s reviews and conflicts, not mine or bots', () => {
+  const label = ownLabel(pr(8, {
+    author: { login: ME }, mergeable: 'CONFLICTING',
+    latestReviews: [review('APPROVED', '', 'ana'), review('APPROVED', '', 'lee'), review('CHANGES_REQUESTED', '', 'sam'),
+      review('COMMENTED', 'self-review', ME), review('COMMENTED', 'overview', 'copilot-pull-request-reviewer')],
+  }), ME);
+  assert.equal(label, '2 approvals · 1 change request · conflicts');
+  assert.equal(ownLabel(pr(8, { author: { login: ME }, mergeable: 'MERGEABLE' }), ME), 'no reviews yet');
 });
 
 test('rows show the number, the author and the title, aligned and cut to the width', () => {

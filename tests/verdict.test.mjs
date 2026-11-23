@@ -42,6 +42,18 @@ test('the chosen review type rewrites a contradicting verdict line and keeps the
   assert.equal(alignVerdict(block, 'comment').changed, false);
 });
 
+test('on your own PR the verdict stays a recommendation, marked as a self-review', () => {
+  const ship = '**Verdict:** ✅ Ship. 1 should-fix.\n\nbody';
+  assert.deepEqual(alignVerdict(ship, 'comment', { own: true }), {
+    digest: '**Verdict:** Self-review: ✅ Ship. 1 should-fix.\n\nbody', changed: true, line: '**Verdict:** Self-review: ✅ Ship. 1 should-fix.',
+  });
+  const marked = alignVerdict(ship, 'comment', { own: true }).digest;
+  assert.equal(alignVerdict(marked, 'comment', { own: true }).changed, false);
+  assert.equal(verdictFromText(marked).level, 'ship');
+  const block = '**Verdict:** 🔴 Fix before merge. 1 must-fix.\n\nbody';
+  assert.equal(alignVerdict(block, 'comment', { own: true }).digest, '**Verdict:** Self-review: 🔴 Fix before merge. 1 must-fix.\n\nbody');
+});
+
 test('digestBody keeps the comment format and cuts everything else', async () => {
   const { digestBody } = await import('../src/adapters.mjs');
   assert.deepEqual(digestBody('Nothing to raise.'), { body: 'Nothing to raise.', removed: [] });

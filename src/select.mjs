@@ -35,6 +35,7 @@ export const STATES = {
   approved: { rank: 3.5, icon: '↑', heading: 'Approved, new commits', color: 'cyan' },
   waiting: { rank: 4, icon: '·', heading: 'Waiting', color: null },
   stale: { rank: 5, icon: '◌', heading: 'Waiting', color: null },
+  mine: { rank: 6, icon: '◆', heading: 'Your PRs', color: 'blue' },
 };
 
 // Age of the PR's last activity, as a colour: fresh is green, a week old is
@@ -60,6 +61,18 @@ export function age(ms) {
 // you last opened the picker for this repository: New and Updated then mean
 // "since you looked"; without it (first visit) they mean the last 24 hours.
 // `ageMs` is how long ago the activity in the label happened.
+// What other people did on one of your PRs: "2 approvals · 1 change request ·
+// conflicts", or "no reviews yet". Your own comments and bot reviews don't count.
+export function ownLabel(pr, viewer) {
+  const others = (pr.latestReviews ?? []).filter((review) => review?.author?.login && review.author.login !== viewer
+    && !isBot(review.author) && !/copilot/i.test(review.author.login));
+  const reviews = [['APPROVED', 'approval', 'approvals'], ['CHANGES_REQUESTED', 'change request', 'change requests'], ['COMMENTED', 'comment', 'comments']]
+    .map(([state, one, many]) => [others.filter((review) => review.state === state).length, one, many])
+    .filter(([n]) => n).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`);
+  return [pr.isDraft ? 'draft' : null, ...(reviews.length ? reviews : ['no reviews yet']), pr.mergeable === 'CONFLICTING' ? 'conflicts' : null]
+    .filter(Boolean).join(' · ');
+}
+
 export function prState(pr, viewer, { mine = null, covered = null, newer = null, now = Date.now(), seenAt = null } = {}) {
   const sinceLooked = Number.isFinite(seenAt);
   // Milliseconds since a timestamp, or null when it's missing: unknown is never "new".
@@ -73,6 +86,8 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
     ...(sinceLooked && (key === 'new' || key === 'updated') ? { heading: `${STATES[key].heading} since you looked` } : {}),
   });
   const head = String(pr.headRefOid ?? '');
+  // Your own PR: listed for a self-review, never treated as reviewed by you.
+  if (pr.author?.login === viewer) return { ...at('mine', pr.updatedAt), label: ownLabel(pr, viewer) };
   if (mine && covered && !head.startsWith(covered)) {
     const count = newer?.count ?? 0;
     const what = count ? `${count} new commit${count === 1 ? '' : 's'}` : 'new commits';
@@ -95,11 +110,12 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
 // `commitsSince(number, covered, head)` counts the commits after your review;
 // it is called only for PRs you reviewed that have changed since.
 export async function candidatePrs(prs, viewer, { commitOf = async () => null, commitsSince = async () => null, now = Date.now(), seenAt = null } = {}) {
-  const hidden = { reviewed: 0, draft: 0, yours: 0, bot: 0 };
+  const hidden = { reviewed: 0, draft: 0, bot: 0 };
   const kept = [];
   for (const pr of prs) {
+    // Your own PRs are listed (drafts too) for a self-review; your comments on them don't count as a review.
+    if (pr.author?.login === viewer) { kept.push({ ...pr, state: prState(pr, viewer, { now, seenAt }) }); continue; }
     if (pr.isDraft) { hidden.draft++; continue; }
-    if (pr.author?.login === viewer) { hidden.yours++; continue; }
     if (isBot(pr.author)) { hidden.bot++; continue; }
     const latest = (pr.latestReviews ?? []).filter((review) => review.author?.login === viewer).at(-1);
     const mine = latest && latest.state !== 'DISMISSED' ? latest : null;
@@ -117,7 +133,7 @@ export async function candidatePrs(prs, viewer, { commitOf = async () => null, c
 export function hiddenSummary({ hidden, open }) {
   const parts = [
     [hidden.reviewed, 'reviewed'], [hidden.draft, hidden.draft === 1 ? 'draft' : 'drafts'],
-    [hidden.yours, 'yours'], [hidden.bot, hidden.bot === 1 ? 'bot' : 'bots'],
+    [hidden.bot, hidden.bot === 1 ? 'bot' : 'bots'],
   ].filter(([count]) => count).map(([count, name]) => `${count} ${name}`);
   return `${open} open${parts.length ? `; hidden: ${parts.join(', ')}` : ''}`;
 }
@@ -295,7 +311,8 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
     const count = list.prs.filter(skipped).length;
     view = pickerRows(visible, width, { color, skipped });
     const looked = Number.isFinite(seenAt) ? ` · last looked ${age(Math.max(0, now - seenAt))} ago` : '';
-    const title = `${repo}: ${list.prs.length - count} to review${count ? `, ${count} skipped` : ''} (${hiddenSummary(list)})${looked}`;
+    const yours = list.prs.filter((pr) => pr.state.key === 'mine' && !skipped(pr)).length;
+    const title = `${repo}: ${list.prs.length - count - yours} to review${yours ? `, ${yours} yours` : ''}${count ? `, ${count} skipped` : ''} (${hiddenSummary(list)})${looked}`;
     const index = Math.max(0, view.map.findIndex((pr) => pr && pr.number === focus?.number));
     return { rows: view.rows, title, index };
   };

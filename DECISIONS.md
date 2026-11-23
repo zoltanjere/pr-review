@@ -260,6 +260,7 @@ Each entry has three parts:
     - **Request changes** when verify confirmed a Must fix;
     - otherwise **Approve**.
   - Only **Comment only** is offered when the PR has commits newer than the reviewed head, since an Approve would cover unreviewed code, or when it's the person's own PR, which GitHub doesn't let them approve. Closed and merged PRs can't be posted to.
+  - **Own PR:** the person isn't a reviewer there, so the code-decided verdict is kept as a recommendation and marked `**Verdict:** Self-review: ✅ Ship. …`. It is not rewritten to "Not approved yet" as it is for a comment on someone else's PR (`alignVerdict(…, { own: true })`).
   - The body is the digest plus a one-line footer: "Reviewed at `<sha>` with AI assistance. Each finding was checked against the code." It names the commit and is open about the AI help, without "automated" or the tool's name, since a person runs and posts it.
 - **Why:** The digest's verdict already follows from Must fix (5.2), so the recommendation reuses it rather than judging again. The live-state checks stop an Approve on code nobody reviewed.
 
@@ -322,7 +323,7 @@ Each entry has three parts:
   - The reviews may hold sensitive content.
 
 ### 7.3 PR picker: what is listed and why
-- **Decision:** Without a URL, the tool lists the open PRs of `defaultRepository` from one `gh pr list --json number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,createdAt,updatedAt` call, and you pick one with the arrow keys (`src/select.mjs`).
+- **Decision:** Without a URL, the tool lists the open PRs of `defaultRepository` from one `gh pr list --json number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,createdAt,updatedAt,mergeable` call, and you pick one with the arrow keys (`src/select.mjs`).
   - **Listed:**
     - PRs with no review from you;
     - PRs whose latest review by you was dismissed;
@@ -330,7 +331,7 @@ Each entry has three parts:
     - PRs where you were asked to review again, even if you reviewed the current head.
 
     Any review type counts.
-  - **Hidden:** drafts, your own PRs and bot PRs.
+  - **Hidden:** other people's drafts and bot PRs.
   - **States and order:** each PR gets one state, first match wins, shown with an icon, a colour and a label, and grouped under a heading in this order:
     1. **⟳ Fixes pushed:** your latest review was Request changes or Comment, and there are commits after it ("3 new commits · 2h"). The count comes from one `gh api repos/<repo>/compare/<reviewed>...<head>` call per changed PR, not from `gh pr list --json commits`: asking for every PR's commits exceeded GitHub's 500,000-node query limit on a real repository. If the count fails, the PR is still listed, as "new commits".
     2. **★ Asked for you:** you're in `reviewRequests`.
@@ -338,6 +339,7 @@ Each entry has three parts:
     4. **↑ Updated since you looked:** updated after your last visit (first visit: 24 h).
     5. **↑ Approved, new commits:** you approved and commits came in after ("approved · 2 new commits").
     6. **Waiting:** the rest, with **◌** for 14 days or more without an update ("idle 23d").
+    7. **◆ Your PRs:** your own open PRs, drafts included, listed for a self-review. Your own reviews on them are ignored, so they're never hidden or shown as "fixes pushed". The label counts other people's latest reviews, leaving out bots and Copilot, and adds `conflicts` when `mergeable` is `CONFLICTING` ("1 approval · conflicts", or "no reviews yet"). The header counts them separately ("6 to review, 1 yours").
 
     Within a group, the most recent activity comes first. A missing date counts as unknown, never as new.
   - **Colours:** the icon and the group heading take the state's colour; the label is coloured by the age of the activity it names (green under a day, plain up to a week, yellow from a week, red from 14 days). Only skipped rows are dimmed.
@@ -347,6 +349,7 @@ Each entry has three parts:
 - **Why:**
   - The re-list rule uses new commits, not the branch protection's "dismiss stale approvals" setting. Reading protection rules needs admin rights, and new commits after a Request changes also deserve a second look (user decision).
   - Listing uses no model, so it's free.
+  - **Own PRs are listed:** a self-review before asking others is useful, and drafts are when it's most useful.
   - **Colour is never the only signal:** the icon and label carry the state with `NO_COLOR` or in a pipe.
   - **Fixes pushed comes first:** a PR where you asked for changes and the author answered is the most likely to need you next.
   - **Old PRs stand out instead of fading:** the first version dimmed stale rows, which hid exactly the PRs that had sat untouched. A red age label makes them visible.

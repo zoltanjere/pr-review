@@ -775,7 +775,7 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
     // Open PRs of owner/repo with what the picker needs, in one read-only call.
     async listOpenPrs(repo) {
       return JSON.parse(await execute('gh', ['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '200',
-        '--json', 'number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,createdAt,updatedAt']));
+        '--json', 'number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,createdAt,updatedAt,mergeable']));
     },
     // The commit the viewer's latest review covered, for reviews without our
     // footer. gh pr list leaves review commits empty, the REST API does not.

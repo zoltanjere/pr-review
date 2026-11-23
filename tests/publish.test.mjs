@@ -122,6 +122,15 @@ test('a non-recommended type can be chosen, and the verdict line follows the cho
   assert.deepEqual([cancel.result, cancel.posts], [{ posted: null }, []]);
 });
 
+test('on your own PR only a comment is offered, and the verdict is posted as a self-review', async (t) => {
+  const run = await session(t, [1, 'default'], { status: open({ author: 'bob' }) });
+  assert.deepEqual(run.menus[1].rows, ['Comment only (recommended)', 'Cancel, keep it local']);
+  assert.equal(run.posts[0].event, 'comment');
+  assert.match(run.posts[0].body, /^\*\*Verdict:\*\* Self-review: ✅ Ship\./);
+  assert.match(await run.digest(), /^\*\*Verdict:\*\* Self-review: ✅ Ship\./);
+  assert.match(run.output(), /Verdict line marked as a self-review/);
+});
+
 test('q or Esc keeps it local in either menu', async (t) => {
   const first = await session(t, [null]);
   assert.deepEqual([first.result, first.posts], [{ posted: null }, []]);

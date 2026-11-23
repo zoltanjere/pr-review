@@ -2,6 +2,11 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.8.1 (2026-11-23)
+
+- **Your PRs in the picker:** your own open PRs, drafts included, are listed under ◆ Your PRs for a self-review, labelled with other people's reviews and merge conflicts.
+- **Self-review verdict:** posting on your own PR (comment only) keeps the verdict as a recommendation, marked `Self-review:`, instead of rewriting it to "Not approved yet".
+
 ## 0.8.0 (2026-11-23)
 
 - **Weakened protections:** a trade-off the PR states that removes or weakens a protection (code-owner review, access control, a merge or release gate) is no longer rejected as already stated. Verify asks whether the owners have agreed.

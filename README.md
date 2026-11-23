@@ -82,6 +82,8 @@ The link always runs this checkout, so `git pull` updates the command. Config, r
 reviewpr <pr-url>                # review one PR (or: node src/review.mjs <pr-url>)
 reviewpr                         # pick from defaultRepository's open PRs
 reviewpr --yes <url>             # no prompts, never posts; the digest goes to stdout
+reviewpr watch                   # keep the picker open and notify on changes (see Watch)
+reviewpr watch --install         # check in the background instead (--uninstall removes it)
 ```
 
 The picker lists open PRs you haven't reviewed yet, plus ones with new commits since your review, grouped by what needs you most:
@@ -114,6 +116,43 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
 - **Hidden:** other people's drafts and bot PRs.
 - **Keys:** `↑`/`↓` move, Enter reviews, and `q` cancels. `s` skips the highlighted PR until its author pushes a new commit, and `a` shows skipped PRs again (press `s` on one to unskip it).
 - **Where this is kept:** skips and the time you last looked live in `state/picker.json` on your machine only, which is git-ignored. Nothing is written to GitHub.
+
+### Watch for PR changes
+
+`reviewpr watch` sends a macOS notification when something you care about happens, such as a new PR, or fixes pushed after your Request changes. It checks every few minutes with read-only `gh` calls and uses no model, so it costs no tokens.
+
+```sh
+brew install terminal-notifier   # clicking a notification opens the PR; without it, notifications can't be clicked
+```
+
+**Pick the events in `config.json`.** Without a `watch` block, you get `new` and `fixes-after-changes`.
+
+```json
+"watch": { "events": ["new", "fixes-after-changes", "merged-reviewed"], "intervalMinutes": 5 }
+```
+
+| Event | Notifies when |
+|---|---|
+| `new` | a PR you can review appears: opened, or moved out of draft (not yours, not a bot's) |
+| `fixes-after-changes` | new commits after your Request changes |
+| `reviewed-updated` | new commits on any PR you reviewed (Approve, Request changes or Comment) |
+| `merged-reviewed` | a PR you reviewed, or one of yours, is merged |
+| `merged` | any PR in the repository is merged |
+| `review-requested` | you're asked to review, or asked again |
+| `my-pr-reviewed` | someone approves, requests changes on or comments on one of your PRs |
+| `my-pr-conflicts` | one of your PRs starts having merge conflicts |
+
+One change gives one notification, even when it matches several events. A misspelled event name stops `watch` with the list of valid names. The first check only records what's already open, so you don't get a burst of notifications for old PRs.
+
+**Two ways to run it; use either or both:**
+- **In the background:** `reviewpr watch --install` adds a launchd agent that checks every `intervalMinutes`, including after a reboot. Run it again after changing `watch` in `config.json`. `reviewpr watch --uninstall` removes it. Its log is `state/watch.log`.
+- **In a terminal:** `reviewpr watch` keeps the picker open:
+  - It checks on the same interval, refreshes the list in place and marks new items with `•` until you move onto them. `r` checks immediately.
+  - Enter reviews the highlighted PR right there, and you come back to the list afterwards. Checking continues during a review, as desktop notifications only.
+  - Merges and events on your own PRs appear on the status line, such as `✔ #61 merged by lee-park · 2m ago`.
+  - While it's open, the background agent stays quiet, so you never get two notifications for one change.
+
+Notifications never start a review or post anything. They only show the PR, and clicking one opens it in the browser. Watch's memory lives in `state/watch.json` and is git-ignored.
 
 While it runs, each step shows a spinner, a timer, and its live tokens and AI credits:
 

@@ -2,6 +2,12 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.9.0 (2026-11-23)
+
+- **`reviewpr watch`:** macOS notifications for the events listed in `config.json` (`new`, `fixes-after-changes`, `reviewed-updated`, `merged-reviewed`, `merged`, `review-requested`, `my-pr-reviewed`, `my-pr-conflicts`). It polls with read-only `gh` calls and uses no model.
+- **Background mode:** `watch --install` adds a launchd agent that runs `watch --once` every `intervalMinutes`; `--uninstall` removes it.
+- **Terminal mode:** `watch` keeps the picker open and refreshes it in place. Enter reviews in the same terminal and returns to the list, and `r` checks immediately. Merges and events on your own PRs show on a status line.
+
 ## 0.8.1 (2026-11-23)
 
 - **Your PRs in the picker:** your own open PRs, drafts included, are listed under ◆ Your PRs for a self-review, labelled with other people's reviews and merge conflicts.

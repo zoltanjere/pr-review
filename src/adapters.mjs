@@ -82,6 +82,30 @@ function dropEmptyGroups(text) {
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// Other PRs and issues the PR body names (`#163`, `owner/repo#163`, or a
+// github.com pull/issue URL), so verify can see whether a condition the body
+// sets ("stays a draft until #163 merges") has been met. Skips this PR itself,
+// issues it closes (fetched in full already) and AB# work items. At most 5.
+export const REFERENCE_LIMIT = 5;
+export function prReferences(text, pr, { exclude = [] } = {}) {
+  const found = new Map();
+  const add = (owner, repo, number) => {
+    const n = Number(number);
+    const same = owner.toLowerCase() === pr.owner.toLowerCase() && repo.toLowerCase() === pr.repo.toLowerCase();
+    if (!Number.isSafeInteger(n) || n < 1 || (same && (n === Number(pr.number) || exclude.map(Number).includes(n)))) return;
+    const key = `${owner}/${repo}#${n}`.toLowerCase();
+    if (!found.has(key)) found.set(key, { owner, repo, number: n });
+  };
+  const source = String(text ?? '');
+  for (const m of source.matchAll(/https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:pull|issues)\/(\d+)/g)) add(m[1], m[2], m[3]);
+  const bare = source.replace(/https:\/\/\S+/g, ' ');
+  for (const m of bare.matchAll(/(?<![\w/.-])([\w.-]+)\/([\w.-]+)#(\d+)\b/g)) add(m[1], m[2], m[3]);
+  // A bare #N after an explicit owner/repo#N is usually shorthand for it.
+  const explicit = new Set([...found.values()].map((ref) => ref.number));
+  for (const m of bare.matchAll(/(?<![\w/#.-])#(\d+)\b/g)) if (!explicit.has(Number(m[1]))) add(pr.owner, pr.repo, m[1]);
+  return [...found.values()].slice(0, REFERENCE_LIMIT);
+}
+
 export function checkDigest(text) {
   const visible = text.split(/<details\b/i)[0];
   const words = visible.split(/\s+/).filter(Boolean).length;
@@ -319,6 +343,7 @@ ${JSON.stringify(numbered, null, 2)}
 How to check:
 - Tier "A" findings: open the cited code yourself (files, \`git show\`, \`git grep\`) and cite what you opened with file:line. If the claim as stated is wrong but the code it points at has a related real defect, confirm that defect instead and rewrite the finding to describe it.
 - Tier "B" findings: judge from the diff file; open a file only when the diff cannot settle it.
+- A finding about a rule in a document or configuration file (instructions, a skill, a policy, a config): read the whole section the cited line belongs to, and the other rules in that file that could override or cover it, before confirming. Cite the line that settles it.
 - A finding that claims a specific input gives a specific result ("X makes Y happen"): walk that exact input through every function it passes, in order, and note in the evidence what each step does to it, with file:line (how it is split, normalised, matched, guarded). Confirm only if every step agrees. If a step contradicts the example, give an input that does trigger the problem, or reject the finding if none does; if you cannot follow a step, answer Question.
 The reviewers' claim is not evidence.
 
@@ -326,7 +351,7 @@ Decide for each:
 - Confirmed: the code shows the problem and a concrete case triggers it.
 - Question: plausible, but the code cannot settle it (for example it depends on a design or runtime behaviour). Never answer Question because you did not look.
 - Rejected: the claim is false (the code, a guard, a caller or a test rules it out); or it is pure style or taste with no concrete effect; or it is true but below the Minor bar below. A true finding that clears the Minor bar is not Rejected. Being outside the specification is not a reason to reject a concrete problem.
-  Already stated in the PR: reject with "already stated in the PR" when the PR body already says what the finding describes: a gap, limitation or deferral (such as a requirement it names as a follow-up), or a check it says was run when the finding only asks for proof of that same check (same tool or command). Quote the PR's words in the evidence. Exception: if the merged code does something wrong because of the gap, or the code gives a concrete reason to doubt the stated check, judge that instead.
+  Already stated in the PR: reject with "already stated in the PR" when the PR body already says what the finding describes: a gap, limitation or deferral (such as a requirement it names as a follow-up), or a check it says was run when the finding only asks for proof of that same check (same tool or command). Quote the PR's words in the evidence. Exception: if the merged code does something wrong because of the gap, or the code gives a concrete reason to doubt the stated check, judge that instead. A statement tied to a condition ("until #163 merges", "while this is a draft", "after X lands") counts as stated only while that condition is unmet: check \`isDraft\` and \`references\` in the context file, which give the current state of the PRs and issues the body names. If the condition is met, the promised step is due: judge the finding on its own and cite the reference's state in the evidence.
 
 If Confirmed, give it one priority. This is the only place priority is decided:
 - Must fix: merging as-is causes wrong behaviour, a crash, a security hole, data loss or exposure of private data, breaks a caller, or misses a requirement the specification makes mandatory. A way for someone to deliberately get past a check the PR adds (a fail-open they can trigger on purpose) is a security hole when that check is a protection: access control, validation of untrusted input, a filter for private or harmful data, or a gate that decides a merge, release or deploy.
@@ -590,6 +615,24 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
     return items;
   }
 
+  // State of each referenced PR or issue: one read-only REST call each. A
+  // failure is recorded, never fatal.
+  async function fetchReferences(references) {
+    const results = [];
+    for (const ref of references) {
+      const name = `${ref.owner}/${ref.repo}#${ref.number}`;
+      try {
+        const data = JSON.parse(await withProgress(reporter, `checking referenced ${name}`, () =>
+          execute('gh', ['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.number}`, '--jq',
+            '{title, state, url: .html_url, pullRequest: (.pull_request != null), draft: (.draft // false), mergedAt: .pull_request.merged_at, closedAt: .closed_at}']), QUIET));
+        results.push({ reference: name, ...data });
+      } catch (error) {
+        results.push({ reference: name, error: error.message });
+      }
+    }
+    return results;
+  }
+
   async function fetchIssues(pr, references) {
     const issues = [];
     for (const reference of references ?? []) {
@@ -611,7 +654,7 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
       const local = await withProgress(reporter, 'finding local repository', () => findLocalRepository(pr, projectsRoot, execute), QUIET);
       const url = `https://github.com/${pr.owner}/${pr.repo}/pull/${pr.number}`;
       const metadata = JSON.parse(await withProgress(reporter, 'fetching PR metadata', () =>
-        execute('gh', ['pr', 'view', url, '--json', 'baseRefOid,headRefOid,title,body,closingIssuesReferences']), QUIET));
+        execute('gh', ['pr', 'view', url, '--json', 'baseRefOid,headRefOid,title,body,isDraft,closingIssuesReferences']), QUIET));
       const { baseRefOid: base, headRefOid: head } = metadata;
       if (!/^[a-f0-9]{40}$/i.test(base ?? '') || !/^[a-f0-9]{40}$/i.test(head ?? '')) {
         throw new Error('GitHub returned invalid PR commit IDs');
@@ -635,11 +678,14 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
         const commits = await git('log', '--oneline', `${base}..${head}`);
         const issues = await fetchIssues(pr, metadata.closingIssuesReferences);
         const workItems = await fetchWorkItems(`${metadata.title ?? ''}\n${metadata.body ?? ''}\n${commits}`, config.azureDevOpsOrg);
+        const references = await fetchReferences(prReferences(`${metadata.title ?? ''}\n${metadata.body ?? ''}`, pr, {
+          exclude: (metadata.closingIssuesReferences ?? []).map((issue) => issue.number),
+        }));
         await stageSkills(workspace, checkout);
         const diff = join(workspace, 'diff.txt');
         const context = join(workspace, 'pr-context.json');
         await writeFile(diff, diffText);
-        await writeFile(context, JSON.stringify({ ...metadata, commits, issues, workItems }, null, 2));
+        await writeFile(context, JSON.stringify({ ...metadata, commits, issues, workItems, references }, null, 2));
         reporter.event('context', {
           title: metadata.title, base, head,
           files: (diffText.match(/^diff --git /gm) ?? []).length,

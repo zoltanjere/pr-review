@@ -13,7 +13,8 @@ It reviews in a throwaway clone and never touches your checkouts. It posts to Gi
 ## How it works
 
 ```
-prepare ── temporary clone at the PR head, diff, PR body, commits, linked issues and AB# work items
+prepare ── temporary clone at the PR head, diff, PR body, commits, linked issues, AB# work items
+           and the state of PRs the body names (open, merged, draft)
    ├─ ponytail-review   correctness, safety, load, tests       ┐ in parallel
    └─ code-review       repo standards + "does it match spec"  ┘
 verify  ── list and tier the findings, then check them against the cited code

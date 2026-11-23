@@ -73,6 +73,7 @@ Each entry has three parts:
 - **Decision:** `prepare()` fetches these into `pr-context.json`:
   - the linked GitHub issues (`closingIssuesReferences`, via `gh issue view`)
   - the Azure Boards work items referenced as `AB#<id>` in the title, body or commits (via `az boards work-item show`)
+  - the PR's own `isDraft`, and the current state of up to 5 other PRs or issues the title or body names (`#163`, `owner/repo#163` or a github.com URL), via one read-only `gh api repos/<owner>/<repo>/issues/<n>` call each: open or closed, merged when, draft. A bare `#N` after an explicit `owner/repo#N` with the same number is read as shorthand for it. A failed lookup is recorded with its error.
 
   Reviewers get an "Issue tracker" note saying these are already fetched. A failed work-item fetch is recorded with its error, and the run continues.
 - **Why:** Copilot shell rules match only the first subcommand. Allowing `gh issue` would also allow `gh issue create`, and the same goes for `az boards`. Pre-fetching keeps agents read-only.
@@ -168,16 +169,18 @@ Each entry has three parts:
 - **Why:** A finding that let added lines slip past a new content scanner was rated Should fix, although the scanner's whole purpose is to catch such content. The rule then over-fired the other way: on a heuristic report scorer whose docstring already said invented reproductions pass, one more way to fool it was rated Must fix and blocked a PR whose earlier findings were all fixed.
 
 ### 4.2b Claimed examples are traced; severity is not lowered by likelihood
-- **Decision:** When a finding claims a specific input gives a specific result, verify walks that exact input through each function, citing `file:line` per step. It confirms only if every step agrees; otherwise it corrects the example, rejects the finding, or makes it a Question. A true problem with a concrete case stays Should fix even when the case is unusual or only lowers a result; whether it blocks is the person's decision when posting (see 5.2).
+- **Decision:** When a finding claims a specific input gives a specific result, verify walks that exact input through each function, citing `file:line` per step. It confirms only if every step agrees; otherwise it corrects the example, rejects the finding, or makes it a Question. For a rule in a document or configuration file (instructions, a skill, a policy), it reads the whole section and the other rules in that file that could override or cover the cited one, and cites the line that settles it. A true problem with a concrete case stays Should fix even when the case is unusual or only lowers a result; whether it blocks is the person's decision when posting (see 5.2).
 - **Why:**
-  - **Tracing:** a confirmed example was false, because a split at `;` in an earlier function put the two words in different sentences. Verify can't run the code (the sandbox forbids it on purpose), so it has to trace instead.
+  - **Tracing:** a confirmed example was false, because a split at `;` in an earlier function put the two words in different sentences. In a skill file, a finding that a fix round could go "narrow" was confirmed from line 14, while line 24, ten lines below, says a fix round always makes the next pass full. Verify can't run the code (the sandbox forbids it on purpose), so it has to trace instead.
   - **No likelihood rule:** a rule that made unusual inputs, unmeasured performance costs and fail-closed failures Minor was tried and removed. It hid true Should fixes from the author, and mixed up how important a finding is with whether it blocks.
 
 ### 4.2c What the PR already says is not a finding
 - **Decision:** Verify rejects a finding as "already stated in the PR" when the PR body already says what it describes: a gap, limitation or deferral (such as a requirement named as a follow-up), or a check the PR says was run when the finding only asks for proof of that same check (same tool or command). Verify quotes the PR's words. The exception is when the merged code does something wrong because of the gap, or the code gives a concrete reason to doubt the stated check. Verify reads the PR context for this, not only for requirement findings.
+  - **Conditions:** a statement tied to a condition ("stays a draft until #163 merges", "after X lands") counts as stated only while the condition is unmet. Verify checks `isDraft` and `references` in the context; once the condition is met, the promised step is due and the finding is judged on its own.
 - **Why:**
   - A PR listed three acceptance criteria as follow-ups. Verify noted the gap was "real but disclosed" and still rated it Should fix, so the comment repeated the author's own words back to them.
   - "Same check" matters: in one run, the PR saying one validation command exited 0 was wrongly taken as an answer to whether a different tool accepted the file.
+  - Conditions matter: a PR said it "stays a draft until" another PR merged, and that a pinned version would then move. The other PR had merged and this one was out of draft, but the pin hadn't moved. Verify rejected the finding as already stated, because it couldn't see either state.
 
 ### 4.3 Own evidence only
 - **Decision:** Verify must base every decision on code or files it opened, and cite `file:line`. Another review's claim is not evidence.

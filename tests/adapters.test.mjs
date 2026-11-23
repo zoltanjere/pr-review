@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createAdapters, findLocalRepository, runCommand, stageSkills, REVIEWERS } from '../src/adapters.mjs';
+import { createAdapters, findLocalRepository, prReferences, runCommand, stageSkills, REVIEWERS } from '../src/adapters.mjs';
 
 const MODEL = 'claude-sonnet-5.5';
 const PR = { owner: 'acme', repo: 'widget', number: '42' };
@@ -49,11 +49,12 @@ const isCheck = (args) => promptOf(args).startsWith('Verify code-review findings
 
 // Real git against the fixture (fetches redirected to the local repo), faked
 // gh and az, and `copilot(args, options)` for agent calls.
-function mockExecute(f, { metadata = {}, copilot, az, issue } = {}) {
+function mockExecute(f, { metadata = {}, copilot, az, issue, reference } = {}) {
   return async (command, args, options) => {
     if (command === 'az') return az(args);
     if (command === 'gh') {
       if (args[0] === 'issue') return issue(args);
+      if (args[0] === 'api' && /\/issues\/\d+$/.test(args[1])) return reference ? reference(args) : JSON.stringify({ state: 'open' });
       return JSON.stringify({ baseRefOid: f.base, headRefOid: f.head, title: '', body: '', closingIssuesReferences: [], ...metadata });
     }
     if (command === 'copilot') return copilot(args, options);
@@ -422,6 +423,8 @@ test('the check prompt makes verify trace a claimed example and skip what the PR
   assert.match(prompts[0], /proof of that same check \(same tool or command\)/);
   assert.match(prompts[0], /Quote the PR's words/);
   assert.match(prompts[0], /whether the PR body already states what a finding describes/);
+  assert.match(prompts[0], /counts as stated only while that condition is unmet/);
+  assert.match(prompts[0], /read the whole section the cited line belongs to/);
 });
 
 test('verify with no findings records that and checks nothing', async (t) => {
@@ -527,4 +530,31 @@ test('the picker reads PRs and review commits with read-only gh calls', async ()
   assert.deepEqual(calls[1].slice(0, 7), ['gh', 'pr', 'list', '--repo', 'acme/widget', '--state', 'open']);
   assert.deepEqual(calls[2], ['gh', 'api', '--paginate', '--slurp', 'repos/acme/widget/pulls/7/reviews']);
   assert(calls.every(([, sub, verb]) => !['create', 'review', 'comment', 'edit', 'merge'].includes(verb) && sub !== 'review'));
+});
+
+test('references in the PR body to other PRs and issues are found, without self, closed issues or AB# items', () => {
+  const body = 'Stays a draft until acme/tools#163 merges. See #12, https://github.com/acme/widget/pull/9 and #12 again. Fixes #17. AB#1234. This is #42.';
+  assert.deepEqual(prReferences(body, PR, { exclude: [17] }).map((ref) => `${ref.owner}/${ref.repo}#${ref.number}`),
+    ['acme/widget#9', 'acme/tools#163', 'acme/widget#12']);
+  // A later bare #163 is shorthand for the explicit acme/tools#163, not this repo's #163.
+  assert.deepEqual(prReferences('Needs acme/tools#163. Once #163 merges, move the pin.', PR).map((ref) => `${ref.owner}/${ref.repo}#${ref.number}`), ['acme/tools#163']);
+  const many = Array.from({ length: 9 }, (_, i) => `#${i + 100}`).join(' ');
+  assert.equal(prReferences(many, PR).length, 5);
+});
+
+test('preparation records the draft state and the state of referenced PRs, and survives a failed lookup', async (t) => {
+  const looked = [];
+  const { prepared: result } = await prepared(t, {
+    metadata: { title: 'Fixture', body: 'Stays a draft until acme/tools#163 merges; see #12.', isDraft: false },
+    reference: (args) => {
+      looked.push(args[1]);
+      if (args[1].endsWith('/12')) throw new Error('not found');
+      return JSON.stringify({ title: 'Tool flags', state: 'closed', pullRequest: true, mergedAt: '2026-11-11T08:57:15Z' });
+    },
+  });
+  const context = JSON.parse(await readFile(result.context, 'utf8'));
+  assert.deepEqual(looked, ['repos/acme/tools/issues/163', 'repos/acme/widget/issues/12']);
+  assert.equal(context.isDraft, false);
+  assert.deepEqual(context.references[0], { reference: 'acme/tools#163', title: 'Tool flags', state: 'closed', pullRequest: true, mergedAt: '2026-11-11T08:57:15Z' });
+  assert.match(context.references[1].error, /not found/);
 });

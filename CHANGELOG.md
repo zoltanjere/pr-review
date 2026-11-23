@@ -2,6 +2,12 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.6.0 (2026-11-23)
+
+- **Referenced PRs:** preparation records the PR's draft state and the current state of up to 5 PRs or issues its body names (open, closed, merged when), with read-only `gh api` calls.
+- **Conditions in the PR body:** "stays a draft until #163 merges" counts as already stated only while #163 is unmerged. Once it has merged, a finding about the promised step is judged on its own.
+- **Rules in documents:** for a finding about a rule in a document or config file, verify reads the whole section and the rules around it that could override it before confirming.
+
 ## 0.5.0 (2026-11-23)
 
 - **PR picker states:** each PR shows an icon, a colour and a label, grouped most urgent first: ⟳ Fixes pushed ("3 new commits · 2h"), ★ Asked for you, ● New (opened in 24 h), ↑ Updated (24 h, or approved with new commits), then Waiting, with ◌ for 14+ days idle. Colour is never the only signal.

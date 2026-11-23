@@ -165,3 +165,20 @@ test('notify uses terminal-notifier with the PR link and a group per PR, osascri
   const neither = async () => { throw new Error('no'); };
   await assert.rejects(notify(notification, { exec: neither }), /terminal-notifier: no; osascript: no/);
 });
+
+test('a rebase with no new changes stays quiet; the next real push notifies', async () => {
+  const reviewed = [pr(1, { latestReviews: [myReview('CHANGES_REQUESTED')], baseRefName: 'main' })];
+  const scanWith = async (prs, newer, same) => {
+    const list = await candidatePrs(prs, ME, { now: NOW, commitsSince: async () => newer, compareChanges: async () => same });
+    return { viewer: ME, all: prs, list };
+  };
+  const events = ['fixes-after-changes', 'reviewed-updated'];
+  let memory = watchEvents({ repo: REPO, scan: await scanWith(reviewed, null, null), events, now: NOW }).memory;
+  const rebased = [{ ...reviewed[0], headRefOid: NEW }];
+  const quiet = watchEvents({ repo: REPO, scan: await scanWith(rebased, { count: 1, status: 'diverged', merges: 0 }, true), memory, events, now: NOW });
+  assert.deepEqual(quiet.notifications, []);
+  memory = quiet.memory;
+  const fixed = [{ ...reviewed[0], headRefOid: 'c'.repeat(40) }];
+  const loud = watchEvents({ repo: REPO, scan: await scanWith(fixed, { count: 2, status: 'diverged', merges: 0 }, false), memory, events, now: NOW });
+  assert.deepEqual(loud.notifications.map((n) => n.headline), ['⟳ #1 fixes pushed']);
+});

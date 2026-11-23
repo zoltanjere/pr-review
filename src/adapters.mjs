@@ -9,7 +9,7 @@ import { withProgress } from './progress.mjs';
 import { formatTokens, formatUsage, short, toReporter } from './ui.mjs';
 import { withVerdict } from './verdict.mjs';
 import { linkify } from './links.mjs';
-import { ancestry, checkStatuses, followUpMode } from './follow-up.mjs';
+import { ancestry, checkStatuses, followUpMode, sameChanges } from './follow-up.mjs';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -724,6 +724,11 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
     }
   }
 
+  async function prChanges(repo, base, head) {
+    return JSON.parse(await execute('gh', ['api', `repos/${repo}/compare/${base}...${head}`,
+      '--jq', '{total: (.files | length), files: [.files[] | {filename, previous_filename, status, sha, patch}]}']));
+  }
+
   // What people wrote on the PR since your review: conversation comments,
   // review comments (replies in threads included) and review bodies. Bots are
   // left out. Each says who wrote it and whether that's the PR author.
@@ -877,8 +882,26 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
       const first = decide('kept');
       if (first.mode !== 'follow-up') return first;
       const old = first.head;
-      const checked = decide(ancestry(await withProgress(reporter, 'checking history', () => compareStatus(repo, old, session.head), QUIET)));
+      let history = ancestry(await withProgress(reporter, 'checking history', () => compareStatus(repo, old, session.head), QUIET));
+      // A rebase that left the PR's own changes as they were: still a
+      // follow-up, with no new code to scan.
+      let rebased = false;
+      if (history === 'rewritten' && session.baseName) {
+        const same = await withProgress(reporter, 'comparing the PR\'s changes', async () =>
+          sameChanges(await prChanges(repo, session.baseName, old), await prChanges(repo, session.baseName, session.head)), QUIET).catch(() => null);
+        if (same === true) { history = 'unchanged'; rebased = true; }
+      }
+      const checked = decide(history);
       if (checked.mode !== 'follow-up') return checked;
+      const newDiff = join(session.workspace, 'new-diff.txt');
+      const repliesPath = join(session.workspace, 'replies.json');
+      const plan = { ...checked, old, head: session.head, newDiff, replies: repliesPath, context: session.context, previousState: latest.state, chained: /<sub>Follow-up at/.test(latest.body) };
+      if (rebased) {
+        const replies = await withProgress(reporter, 'reading replies', () => repliesSince(repo, pr.number, latest.submittedAt, me, session.author), QUIET);
+        await writeFile(newDiff, 'Rebased: the PR\'s own changes are the same as at the earlier review.\n');
+        await writeFile(repliesPath, JSON.stringify({ replies, commits: '' }, null, 2));
+        return { ...plan, rebased: true, commits: 0, newDiffText: '', merged: null, replyCount: replies.length };
+      }
       const git = (...args) => execute('git', ['-C', session.checkout, ...args]);
       try {
         await withProgress(reporter, 'fetching the reviewed commit', () => git('fetch', '--no-tags', session.local.remote, old), QUIET);
@@ -899,16 +922,9 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
       const merges = (await git('log', '--merges', '--format=%H', `${old}..${session.head}`)).trim();
       const messages = (await git('log', '--no-merges', '--format=%h %s%n%b', `${old}..${session.head}`)).trim();
       const replies = await withProgress(reporter, 'reading replies', () => repliesSince(repo, pr.number, latest.submittedAt, me, session.author), QUIET);
-      const newDiff = join(session.workspace, 'new-diff.txt');
-      const repliesPath = join(session.workspace, 'replies.json');
       await writeFile(newDiff, newDiffText || 'No changes to the PR\'s files since the earlier review.\n');
       await writeFile(repliesPath, JSON.stringify({ replies, commits: messages }, null, 2));
-      return {
-        ...checked, old, head: session.head, commits, newDiffText, newDiff, replies: repliesPath, context: session.context,
-        replyCount: replies.length, previousState: latest.state,
-        merged: merges ? session.baseName ?? 'the base branch' : null,
-        chained: /<sub>Follow-up at/.test(latest.body),
-      };
+      return { ...plan, rebased: false, commits, newDiffText, replyCount: replies.length, merged: merges ? session.baseName ?? 'the base branch' : null };
     },
     // The follow-up check: one status per earlier finding.
     async followUp(plan) {
@@ -938,8 +954,11 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
     // Open PRs of owner/repo with what the picker needs, in one read-only call.
     async listOpenPrs(repo) {
       return JSON.parse(await execute('gh', ['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '200',
-        '--json', 'number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,createdAt,updatedAt,mergeable']));
+        '--json', 'number,title,author,isDraft,headRefOid,baseRefName,latestReviews,reviewRequests,createdAt,updatedAt,mergeable']));
     },
+    // What a PR changes up to a commit: compare/<base>...<commit>, which diffs
+    // from the merge base. Compared before and after a rebase (sameChanges).
+    prChanges: (repo, base, head) => prChanges(repo, base, head),
     // What happened to a PR that left the open list, for watch's merge events.
     async prOutcome(repo, number) {
       const view = JSON.parse(await execute('gh', ['pr', 'view', String(number), '--repo', repo, '--json', 'state,mergedAt,mergedBy,title,author,url']));
@@ -961,7 +980,7 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
       let data;
       try {
         data = JSON.parse(await execute('gh', ['api', `repos/${repo}/compare/${base}...${head}`,
-          '--jq', '{count: .ahead_by, status: .status, last: (.commits | last | .commit.committer.date)}']));
+          '--jq', '{count: .ahead_by, status: .status, merges: ([.commits[] | select((.parents | length) > 1)] | length), last: (.commits | last | .commit.committer.date)}']));
       } catch (error) {
         if (/\b404\b|Not Found/i.test(error.message)) return { count: null, status: 'missing', last: null };
         throw error;

@@ -190,7 +190,7 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
           const newBody = worth ? (await adapters.digest(verified.markdown, verified.findings)).replace(/^\s*\*\*Verdict:\*\*[^\n]*\n*/, '') : '';
           digest = await adapters.linkify(followUpDigest({
             previous: plan.findings, statuses, newBody, newFindings: verified.findings,
-            facts: { old: plan.old, head: plan.head, commits: plan.commits, chained: plan.chained, merged: plan.merged },
+            facts: { old: plan.old, head: plan.head, commits: plan.commits, chained: plan.chained, merged: plan.merged, rebased: plan.rebased },
           }));
           await save('digest', digest);
           return detail(visibleWords(digest), worth ? 'review-digest' : undefined);
@@ -207,7 +207,7 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
         reservation = await reserveRun(directory, date);
         if (adapters.followUpPlan) plan = await adapters.followUpPlan({ full });
         // Said before any model runs, so a surprise can still be cancelled.
-        if (plan.mode === 'follow-up') ui.reporter.note(followUpLine({ head: plan.old, commits: plan.commits, findings: plan.findings.length }));
+        if (plan.mode === 'follow-up') ui.reporter.note(followUpLine({ head: plan.old, commits: plan.commits, findings: plan.findings.length, rebased: plan.rebased }));
         else if (plan.line) ui.reporter.warn(plan.line);
       },
     }], options);

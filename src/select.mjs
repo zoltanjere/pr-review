@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { palette, plainReporter, short } from './ui.mjs';
 import { isLive, runSteps } from './steps.mjs';
 import { isSkipped, loadState, saveState, skipKey } from './picker-state.mjs';
-import { ancestry, followUpMode } from './follow-up.mjs';
+import { ancestry, followUpMode, sameChanges } from './follow-up.mjs';
 
 // Which open PRs still need your review, what state each is in, and an
 // arrow-key picker for them. Listing uses read-only gh calls only; no model is
@@ -34,6 +34,8 @@ export const STATES = {
   new: { rank: 2, icon: '●', heading: 'New', color: 'green' },
   updated: { rank: 3, icon: '↑', heading: 'Updated', color: 'cyan' },
   approved: { rank: 3.5, icon: '↑', heading: 'Approved, new commits', color: 'cyan' },
+  // Rebased or base merged in, but the PR's own changes are the same as reviewed.
+  unchanged: { rank: 3.8, icon: '…', heading: 'No new changes since your review', color: null },
   waiting: { rank: 4, icon: '·', heading: 'Waiting', color: null },
   stale: { rank: 5, icon: '◌', heading: 'Waiting', color: null },
   mine: { rank: 6, icon: '◆', heading: 'Your PRs', color: 'blue' },
@@ -77,7 +79,7 @@ export function ownLabel(pr, viewer) {
     .filter(Boolean).join(' · ');
 }
 
-export function prState(pr, viewer, { mine = null, covered = null, newer = null, now = Date.now(), seenAt = null } = {}) {
+export function prState(pr, viewer, { mine = null, covered = null, newer = null, unchanged = null, now = Date.now(), seenAt = null } = {}) {
   const sinceLooked = Number.isFinite(seenAt);
   // Milliseconds since a timestamp, or null when it's missing: unknown is never "new".
   const since = (iso) => { const time = Date.parse(iso ?? ''); return Number.isNaN(time) ? null : now - time; };
@@ -97,6 +99,12 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
     // You approved: lower priority than fixes pushed after your change request.
     // `review` and `commits` tell watch which review type the pushes came after.
     const pushed = { review: mine.state, commits: newer?.count ?? null };
+    // Only rebased or merged the base in: nothing for you to check yet. Watch
+    // doesn't notify these; the next real change makes it Fixes pushed again.
+    if (unchanged) {
+      const how = unchanged === 'rebased' ? 'rebased only' : `merged ${pr.baseRefName || 'the base branch'} only`;
+      return { ...at('unchanged', newer?.last ?? pr.updatedAt), ...pushed, label: mine.state === 'APPROVED' ? `approved · ${how}` : how };
+    }
     if (mine.state === 'APPROVED') return { ...at('approved', newer?.last ?? pr.updatedAt), ...pushed, label: `approved · ${what}` };
     // When Enter can't run a follow-up (history rewritten, a hand-written
     // review…), say so before it's pressed.
@@ -120,7 +128,10 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
 // hiding one. Sorted by state priority, then by the age shown in the row.
 // `commitsSince(number, covered, head)` counts the commits after your review;
 // it is called only for PRs you reviewed that have changed since.
-export async function candidatePrs(prs, viewer, { commitOf = async () => null, commitsSince = async () => null, now = Date.now(), seenAt = null } = {}) {
+// `compareChanges(number, base, covered, head)` says whether the PR's own
+// changes are the same as when you reviewed (true, false or null); it is
+// called only after a rebase, or when every new commit is a merge.
+export async function candidatePrs(prs, viewer, { commitOf = async () => null, commitsSince = async () => null, compareChanges = async () => null, now = Date.now(), seenAt = null } = {}) {
   const hidden = { reviewed: 0, draft: 0, bot: 0 };
   const kept = [];
   for (const pr of prs) {
@@ -135,7 +146,12 @@ export async function candidatePrs(prs, viewer, { commitOf = async () => null, c
     const changed = mine && covered && !String(pr.headRefOid ?? '').startsWith(covered);
     // Whatever it returns or throws, a failed count never stops the listing.
     const newer = changed ? await Promise.resolve().then(() => commitsSince(pr.number, covered, pr.headRefOid)).catch(() => null) : null;
-    kept.push({ ...pr, state: prState(pr, viewer, { mine, covered, newer, now, seenAt }) });
+    const rebased = newer?.status === 'diverged';
+    const mergedOnly = newer?.status === 'ahead' && newer.count > 0 && newer.merges === newer.count;
+    const same = rebased || mergedOnly
+      ? await Promise.resolve().then(() => compareChanges(pr.number, pr.baseRefName, covered, pr.headRefOid)).catch(() => null) : null;
+    const unchanged = same === true ? (rebased ? 'rebased' : 'merged') : null;
+    kept.push({ ...pr, state: prState(pr, viewer, { mine, covered, newer, unchanged, now, seenAt }) });
   }
   // Within a group, by the age shown in the row (youngest first: 1h, 3h, 5h); unknown ages last.
   const shownAge = (pr) => (Number.isFinite(pr.state.ageMs) ? pr.state.ageMs : Infinity);
@@ -300,9 +316,14 @@ export function pickerRows(prs, width, { color = false, skipped = () => false, m
   return { rows, map };
 }
 
+// The before/after comparison of a rebased PR, per PR, reviewed commit and
+// head, so the open watch app doesn't repeat its two calls on every refresh.
+const CHANGES = new Map();
+
 // One read of a repository's open PRs: the viewer, every open PR as GitHub
 // returned it (`all`, which watch needs for drafts, bots and merges), and the
 // picker's candidate list. Used by the picker and by watch. Read-only.
+
 export async function scanRepo(repo, adapters, { now = Date.now(), seenAt = null, status = () => {} } = {}) {
   status('reading open PRs');
   const viewer = await adapters.viewer();
@@ -317,6 +338,16 @@ export async function scanRepo(repo, adapters, { now = Date.now(), seenAt = null
     commitsSince: (number, base, head) => {
       status(`counting new commits on #${number}`);
       return adapters.commitsSince?.(repo, base, head) ?? null;
+    },
+    compareChanges: async (number, base, covered, head) => {
+      if (!adapters.prChanges || !base) return null;
+      const key = `${repo}#${number}:${covered}:${head}`;
+      if (CHANGES.has(key)) return CHANGES.get(key);
+      status(`checking what changed on #${number}`);
+      const [then, current] = await Promise.all([adapters.prChanges(repo, base, covered), adapters.prChanges(repo, base, head)]);
+      const result = sameChanges(then, current);
+      CHANGES.set(key, result);
+      return result;
     },
   });
   return { viewer, all, list };

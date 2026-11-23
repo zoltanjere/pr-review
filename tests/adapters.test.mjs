@@ -49,7 +49,7 @@ const isCheck = (args) => promptOf(args).startsWith('Verify code-review findings
 
 // Real git against the fixture (fetches redirected to the local repo), faked
 // gh and az, and `copilot(args, options)` for agent calls.
-function mockExecute(f, { metadata = {}, copilot, az, issue, reference, reviews, compare } = {}) {
+function mockExecute(f, { metadata = {}, copilot, az, issue, reference, reviews, compare, changes } = {}) {
   return async (command, args, options) => {
     if (command === 'az') return az(args);
     if (command === 'gh') {
@@ -57,6 +57,7 @@ function mockExecute(f, { metadata = {}, copilot, az, issue, reference, reviews,
       if (args[0] === 'api' && /\/issues\/\d+$/.test(args[1])) return reference ? reference(args) : JSON.stringify({ state: 'open' });
       if (args[0] === 'api' && args[1] === 'user') return 'me\n';
       if (args[0] === 'api' && args.includes('--paginate')) return reviews ? reviews(args) : '[[]]';
+      if (args[0] === 'api' && args[1].includes('/compare/') && args.at(-1).startsWith('{total')) return changes ? changes(args) : JSON.stringify({ total: 1, files: [{ filename: 'example.txt', status: 'modified', patch: `+${args[1]}` }] });
       if (args[0] === 'api' && args[1].includes('/compare/')) return `${compare ?? 'ahead'}\n`;
       return JSON.stringify({ baseRefOid: f.base, headRefOid: f.head, title: '', body: '', closingIssuesReferences: [], ...metadata });
     }
@@ -279,6 +280,34 @@ test('a PR re-reviewed after fixes gets a follow-up: earlier findings checked, n
   assert.match(digest, /^\*\*Verdict:\*\* ✅ Ship\. The earlier point is resolved, nothing new\./);
   assert.match(digest, new RegExp(`Re-review since \`${f.old.slice(0, 7)}\`\\*\\* \\(1 new commit\\)`));
   assert.match(digest, /\n- ✅ Empty input crashes\n/);
+});
+
+test('a rebase that left the PR\'s changes as they were is still a follow-up, with no scan', async (t) => {
+  const f = await reviewedFixture(t);
+  const output = join(f.root, 'reviews');
+  const prompts = [];
+  const copilot = (args) => {
+    const prompt = promptOf(args);
+    prompts.push(prompt);
+    const model = args[args.indexOf('--model') + 1];
+    if (prompt.startsWith('This is a follow-up review')) {
+      return jsonl([message(JSON.stringify([{ n: 1, status: 'Still open', answer: '-', reply: '', evidence: 'example.txt:1 is unchanged.', remaining: 'An empty file still throws.' }]), model)]);
+    }
+    return goodAgent(args);
+  };
+  const same = () => JSON.stringify({ total: 1, files: [{ filename: 'example.txt', status: 'modified', sha: 'x', patch: '@@ -1 +1 @@\n-before\n+after' }] });
+  const { main } = await import('../src/review.mjs');
+  await main(['https://github.com/acme/widget/pull/42'], {
+    projectsRoot: f.root, configPath: f.config, outputRoot: output, progress: () => {},
+    execute: mockExecute(f, { copilot, reviews: f.reviews, metadata: f.metadata, compare: 'diverged', changes: same }),
+  });
+  const [day] = await readdir(output);
+  const dir = join(output, day, 'widget-PR42');
+  assert.deepEqual((await readdir(dir)).map((file) => file.replace(/^\d{4}-/, '')).sort(), ['digest.md', 'follow-up.md', 'verified.md']);
+  assert(!prompts.some((prompt) => prompt.startsWith('Review only the new commits')));
+  const digest = await readFile(join(dir, (await readdir(dir)).find((file) => file.endsWith('-digest.md'))), 'utf8');
+  assert.match(digest, /\(rebased, no changes to the PR's code\): only the replies to the 1 earlier point were checked\./);
+  assert.match(digest, /### Still open from the last review\n1\. 🔴 \*\*Empty input crashes\*\*/);
 });
 
 test('a rewritten history falls back to a full review and tells the author why', async (t) => {

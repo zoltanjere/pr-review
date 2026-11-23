@@ -219,3 +219,31 @@ test('withNotice puts the fallback reason under the verdict line', () => {
     '**Verdict:** ✅ Ship. No issues found.\n\n> 🔁 **Full re-review:** gone.\n\n### Should fix\n1. x');
   assert.equal(withNotice('body', null), 'body');
 });
+
+const { sameChanges } = await import('../src/follow-up.mjs');
+
+test('sameChanges: the same added and removed lines are the same, wherever they moved', () => {
+  const file = (patch, extra = {}) => ({ filename: 'a.js', status: 'modified', sha: 's1', patch, ...extra });
+  const then = { total: 1, files: [file('@@ -10,3 +10,3 @@ f()\n context\n-old\n+new\n more')] };
+  // Rebased: other hunk position and other context lines.
+  const now = { total: 1, files: [file('@@ -40,3 +40,3 @@ g()\n other context\n-old\n+new\n changed too', { sha: 's2' })] };
+  assert.equal(sameChanges(then, now), true);
+  assert.equal(sameChanges(then, { total: 1, files: [file('@@ -10,3 +10,3 @@\n-old\n+newer')] }), false);
+  assert.equal(sameChanges(then, { total: 2, files: [file('@@\n-old\n+new'), { filename: 'b.js', status: 'added', sha: 'x', patch: '+b' }] }), false);
+  // A binary file has no patch: compared by its blob.
+  const bin = (sha) => ({ total: 1, files: [{ filename: 'logo.png', status: 'modified', sha }] });
+  assert.equal(sameChanges(bin('s1'), bin('s1')), true);
+  assert.equal(sameChanges(bin('s1'), bin('s2')), false);
+  assert.equal(sameChanges(bin(null), bin(null)), null);
+  // GitHub's 300-file limit, or a missing side: can't tell.
+  assert.equal(sameChanges({ total: 300, files: [] }, { total: 300, files: [] }), null);
+  assert.equal(sameChanges(null, now), null);
+});
+
+test('followUpMode follows up when the history was rewritten but the changes are unchanged; the notice says rebased', () => {
+  const result = followUpMode({ latest: review('CHANGES_REQUESTED'), history: 'unchanged' });
+  assert.equal(result.mode, 'follow-up');
+  assert.equal(reReviewNotice({ old: 'a'.repeat(40), commits: 0, rebased: true, total: 3, counts: { fixed: 0, answered: 1, open: 2, added: 0 } }),
+    '> 🔁 **Re-review since `aaaaaaa`** (rebased, no changes to the PR\'s code): only the replies to the 3 earlier points were checked.\n> 1 answered, 2 still open.');
+  assert.equal(followUpLine({ head: 'abc1234', commits: 0, findings: 3, rebased: true }), 'Follow-up of your review at `abc1234`: rebased, no changes to the PR\'s code, 3 findings to check.');
+});

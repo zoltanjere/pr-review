@@ -4,6 +4,8 @@ This project follows [semantic versioning](https://semver.org/). A pipeline or t
 
 ## 0.10.0 (2026-11-23)
 
+- **Rebases don't look like fixes:** after your review, a PR that was only rebased or had the base branch merged in, with its own changes exactly as reviewed, moves to "No new changes since your review" (`rebased only`, `merged main only`) instead of Fixes pushed, and watch doesn't notify. A follow-up on it checks your points against the replies instead of falling back to a full review.
+- **The follow-up scan covers every changed file,** workflows and configuration included, and checks that no other change undoes a fix.
 - **Follow-up digests stay short:** resolved points are one line each (✅ fixed, 💬 answered) with no explanation, titles are cut at 80 characters, and the re-review notice is two lines.
 - **Follow-up reviews:** reviewing a PR again after your Request changes or Comment checks each earlier finding (fixed, partly fixed, answered, still open) and scans only the new commits, instead of a full review. Replies are read and judged against the code. The comment opens with a re-review notice telling the author what was and wasn't reviewed, and the footer names the review it followed, so follow-ups chain.
 - **Clear fallbacks:** after a rebase or force-push, an approval, a hand-written review or one without findings, it runs a full review and says why: in the terminal before any model runs, on the picker's Fixes pushed row, and to the author under the verdict.

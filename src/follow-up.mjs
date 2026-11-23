@@ -102,8 +102,8 @@ export function followUpMode({ full = false, own = false, latest = null, history
 }
 
 // The terminal line for a follow-up, before the first model step.
-export function followUpLine({ head, commits, findings }) {
-  const count = commits ? `${commits} new commit${commits === 1 ? '' : 's'}` : 'no new commits';
+export function followUpLine({ head, commits, findings, rebased = false }) {
+  const count = rebased ? 'rebased, no changes to the PR\'s code' : commits ? `${commits} new commit${commits === 1 ? '' : 's'}` : 'no new commits';
   return `Follow-up of your review at ${at(head)}: ${count}, ${findings} finding${findings === 1 ? '' : 's'} to check.`;
 }
 
@@ -151,12 +151,12 @@ function newSection(body, start) {
 // The notice to the PR author, under the verdict: two short lines saying it's
 // a re-review, its scope, and the counts. Written from templates so it always
 // matches what ran.
-export function reReviewNotice({ old, commits, total, chained = false, merged = null, counts }) {
+export function reReviewNotice({ old, commits, total, chained = false, merged = null, rebased = false, counts }) {
   const since = `${chained ? 'the follow-up at ' : ''}${at(old)}`;
   const points = `${total} earlier point${total === 1 ? '' : 's'}${chained ? ' still open' : ''}`;
-  const scope = commits
-    ? `(${plural(commits, 'new commit')}): only the ${points} and what the new ${commits === 1 ? 'commit' : 'commits'} changed were checked.`
-    : `(no new commits): only the replies to the ${points} were checked.`;
+  const scope = rebased ? `(rebased, no changes to the PR's code): only the replies to the ${points} were checked.`
+    : commits ? `(${plural(commits, 'new commit')}): only the ${points} and what the new ${commits === 1 ? 'commit' : 'commits'} changed were checked.`
+      : `(no new commits): only the replies to the ${points} were checked.`;
   const parts = [
     counts.fixed && `${counts.fixed} fixed`,
     counts.answered && `${counts.answered} answered`,
@@ -185,7 +185,7 @@ export function shortTitle(title, max = 80) {
 // - statuses: the follow-up check's answer, one per earlier finding
 // - newBody: the review-digest skill's body for the new findings ('' if none)
 // - newFindings: verify's findings for the new commits
-// - facts: { old, head, commits, chained, merged }
+// - facts: { old, head, commits, chained, merged, rebased }
 export function followUpDigest({ previous, statuses, newBody = '', newFindings = [], facts }) {
   const items = previous.map((finding, i) => ({ finding, status: statuses[i] }));
   const open = items.filter(({ status }) => !resolved(status))
@@ -265,4 +265,32 @@ export function formatFollowUp(findings, statuses) {
       status.remaining ? `- Remaining: ${status.remaining}` : null,
     ].filter(Boolean).join('\n');
   })].join('\n\n');
+}
+
+// --- Rebased or merged without changes ---------------------------------------
+
+// GitHub's compare returns at most 300 files; with that many, it can't tell.
+const COMPARE_FILE_LIMIT = 300;
+
+// Whether the PR's own changes are the same then and now: the same files, and
+// per file the same added and removed lines. Hunk positions and context are
+// ignored, since a rebase shifts them; a file without a patch (binary, too
+// large) is compared by its blob. Takes two { files, total } from
+// compare/<base>...<commit>; returns true, false, or null when it can't tell.
+export function sameChanges(then, now) {
+  if (!Array.isArray(then?.files) || !Array.isArray(now?.files)) return null;
+  if ([then, now].some((side) => (side.total ?? side.files.length) >= COMPARE_FILE_LIMIT)) return null;
+  const key = (file) => {
+    if (typeof file.patch === 'string') {
+      return `${file.status}\n${file.patch.split('\n').filter((line) => /^[+-]/.test(line)).join('\n')}`;
+    }
+    return file.sha ? `${file.status}\nsha:${file.sha}` : null;
+  };
+  const map = (files) => new Map(files.map((file) => [file.previous_filename ? `${file.previous_filename}→${file.filename}` : file.filename, key(file)]));
+  const a = map(then.files);
+  const b = map(now.files);
+  if ([...a.values(), ...b.values()].some((value) => value === null)) return null;
+  if (a.size !== b.size) return false;
+  for (const [name, value] of a) if (b.get(name) !== value) return false;
+  return true;
 }

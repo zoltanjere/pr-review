@@ -130,6 +130,8 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
   ● #68  10m  octo-dev   feat: show upload progress in the status bar
   Updated since you looked
   ↑ #52  3h   ana-dev    refactor: split the queue worker
+  No new changes since your review
+  … #45  1h   sam-codes  fix: chunk retry order                          rebased only
   Waiting
   · #49  4d   sam-codes  docs: explain chunk sizes
   ◌ #31  23d  lee-park   feat: offline mode                              idle
@@ -142,6 +144,8 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
   - **★ Asked for you:** you're a requested reviewer.
   - **● New since you looked / ↑ Updated since you looked:** opened or updated since you last opened the picker for this repository (on a first visit: the last 24 h). The header says when that was: `last looked 2d ago`.
   - **↑ Approved, new commits:** you approved, and commits came in after.
+  - **… No new changes since your review:** the author only rebased or merged the base branch in (`rebased only`, `merged main only`), and the PR's own changes are exactly as you reviewed them. Nothing for you to check yet, and watch doesn't notify. The next real change moves it back to Fixes pushed, with no skip needed.
+    - It's checked with two read-only calls that compare what the PR changes, then and now, by added and removed lines. Line positions and context are ignored, because a rebase shifts them. If it can't tell (a failed call, 300 or more files), the row stays in Fixes pushed.
   - **Waiting:** the rest. **◌** marks PRs idle for 14 days or more.
   - **◆ Your PRs:** your own open PRs, drafts included, for a self-review.
     - The label shows what others did (`2 approvals · 1 change request · conflicts`), and your own comments never mark them as reviewed.
@@ -275,9 +279,10 @@ digest  ── verdict, a re-review notice for the author, still open, new, reso
   | your last review was an approval | there's nothing to follow up; new commits get a full look |
   | your last review wasn't posted by reviewpr | its findings can't be read |
   | your last review had no numbered findings | nothing to follow up |
-  | a rebase or force-push removed the reviewed commit | earlier findings can't be checked line by line |
+  | a rebase or force-push removed the reviewed commit and changed the PR's code | earlier findings can't be checked line by line |
   | GitHub no longer has the reviewed commit | the same |
 
+- **A rebase with no changes** is still a follow-up, not a full review: your findings apply to the same code, so it checks them against the replies and the current code, and the notice says `(rebased, no changes to the PR's code)`.
 - **Not tracked:** minor items from the earlier review (they were optional), and reviews by other people.
 
 ### Output

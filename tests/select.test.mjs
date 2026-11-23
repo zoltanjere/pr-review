@@ -337,3 +337,51 @@ test('a Fixes pushed row says when Enter will run a full review instead of a fol
   const { reviewedHead } = await import('../src/select.mjs');
   assert.equal(reviewedHead({ body: '<sub>Follow-up at `def5678` of the review at `abc1234`, with AI assistance.</sub>' }), 'def5678');
 });
+
+test('a rebase or base merge with the same changes is "No new changes since your review", not Fixes pushed', async () => {
+  const { candidatePrs, scanRepo } = await import('../src/select.mjs');
+  const reviewed = (number, state = 'CHANGES_REQUESTED') => statePr(number, { headRefOid: 'e'.repeat(40), baseRefName: 'main', latestReviews: [review(state, POSTED)] });
+  const prs = [reviewed(1), reviewed(2), reviewed(3), reviewed(4), reviewed(5, 'APPROVED'), reviewed(6)];
+  const newer = {
+    1: { count: 2, status: 'diverged', merges: 0, last: hoursAgo(1) },
+    2: { count: 1, status: 'ahead', merges: 1, last: hoursAgo(2) },
+    3: { count: 2, status: 'diverged', merges: 0, last: hoursAgo(3) },
+    4: { count: 2, status: 'diverged', merges: 0, last: hoursAgo(4) },
+    5: { count: 2, status: 'diverged', merges: 0, last: hoursAgo(5) },
+    6: { count: 2, status: 'ahead', merges: 1, last: hoursAgo(6) },
+  };
+  const same = { 1: true, 2: true, 3: false, 4: null, 5: true };
+  const compared = [];
+  const list = await candidatePrs(prs, ME, {
+    now: NOW,
+    commitsSince: async (number) => newer[number],
+    compareChanges: async (number, base) => { compared.push([number, base]); return same[number]; },
+  });
+  const byNumber = Object.fromEntries(list.prs.map((item) => [item.number, [item.state.key, item.state.label]]));
+  assert.deepEqual(byNumber, {
+    1: ['unchanged', 'rebased only'],
+    2: ['unchanged', 'merged main only'],
+    3: ['fixes', '2 new commits · full review: history rewritten'],
+    4: ['fixes', '2 new commits · full review: history rewritten'],
+    5: ['unchanged', 'approved · rebased only'],
+    6: ['fixes', '2 new commits'],
+  });
+  // #6 has a real commit next to its merge: never compared.
+  assert.deepEqual(compared.map(([number]) => number), [1, 2, 3, 4, 5]);
+  assert.equal(compared[0][1], 'main');
+
+  // scanRepo compares with two calls once per reviewed commit and head.
+  const calls = [];
+  const adapters = {
+    viewer: async () => ME,
+    listOpenPrs: async () => [reviewed(7)],
+    reviewCommit: async () => null,
+    commitsSince: async () => ({ count: 1, status: 'diverged', merges: 0, last: hoursAgo(1) }),
+    prChanges: async (repo, base, head) => { calls.push(head); return { total: 1, files: [{ filename: 'a.js', status: 'modified', patch: '+x' }] }; },
+  };
+  for (let i = 0; i < 2; i++) {
+    const { list: scanned } = await scanRepo('acme/widget', adapters, { now: NOW });
+    assert.equal(scanned.prs[0].state.key, 'unchanged');
+  }
+  assert.deepEqual(calls, ['a7e50c8', 'e'.repeat(40)]);
+});

@@ -2,6 +2,11 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.8.0 (2026-11-23)
+
+- **Weakened protections:** a trade-off the PR states that removes or weakens a protection (code-owner review, access control, a merge or release gate) is no longer rejected as already stated. Verify asks whether the owners have agreed.
+- **One change, one finding:** findings about the same change at the same location are merged, even when reviews frame them differently (a risk, a scope gap).
+
 ## 0.7.0 (2026-11-23)
 
 - **New since you looked:** ● New and ↑ Updated mean opened or updated since you last opened the picker for that repository (24 hours on a first visit). The header shows `last looked 2d ago`.

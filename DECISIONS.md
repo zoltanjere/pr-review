@@ -177,10 +177,12 @@ Each entry has three parts:
 ### 4.2c What the PR already says is not a finding
 - **Decision:** Verify rejects a finding as "already stated in the PR" when the PR body already says what it describes: a gap, limitation or deferral (such as a requirement named as a follow-up), or a check the PR says was run when the finding only asks for proof of that same check (same tool or command). Verify quotes the PR's words. The exception is when the merged code does something wrong because of the gap, or the code gives a concrete reason to doubt the stated check. Verify reads the PR context for this, not only for requirement findings.
   - **Conditions:** a statement tied to a condition ("stays a draft until #163 merges", "after X lands") counts as stated only while the condition is unmet. Verify checks `isDraft` and `references` in the context; once the condition is met, the promised step is due and the finding is judged on its own.
+  - **Weakened protections:** a stated trade-off that removes or weakens a protection (required or code-owner review, access control, a merge, release or deploy gate) is not rejected. It becomes a Question asking whether the owners of that protection agreed, quoting the PR.
 - **Why:**
   - A PR listed three acceptance criteria as follow-ups. Verify noted the gap was "real but disclosed" and still rated it Should fix, so the comment repeated the author's own words back to them.
   - "Same check" matters: in one run, the PR saying one validation command exited 0 was wrongly taken as an answer to whether a different tool accepted the file.
   - Conditions matter: a PR said it "stays a draft until" another PR merged, and that a pinned version would then move. The other PR had merged and this one was out of draft, but the pin hadn't moved. Verify rejected the finding as already stated, because it couldn't see either state.
+  - Disclosure is not consent: a PR disclosed that its exemption also removed code-owner review for every other PR touching those files. Verify rejected it as already stated, so the digest never raised the biggest risk in the PR, one that only the code owners can accept.
 
 ### 4.3 Own evidence only
 - **Decision:** Verify must base every decision on code or files it opened, and cite `file:line`. Another review's claim is not evidence.

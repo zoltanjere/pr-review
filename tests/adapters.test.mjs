@@ -428,6 +428,20 @@ test('the check prompt makes verify trace a claimed example and skip what the PR
   assert.match(prompts[0], /read your own evidence against the finding/);
 });
 
+test('a stated trade-off that weakens a protection becomes a question, and one change at one place is one finding', async (t) => {
+  const checks = [];
+  const lists = [];
+  const copilot = (args) => {
+    (isCheck(args) ? checks : lists).push(promptOf(args));
+    return verifyStep(args);
+  };
+  const { adapters } = await prepared(t, { copilot });
+  await adapters.verify({ 'code-review': 'review' });
+  assert.match(checks[0], /stated trade-off that removes or weakens a protection \(required or code-owner review/);
+  assert.match(checks[0], /is not rejected as already stated: answer Question/);
+  assert.match(lists.find((p) => p.includes('extract their findings')), /same change at the same location are one finding/);
+});
+
 test('verify with no findings records that and checks nothing', async (t) => {
   const copilot = (args) => verifyStep(args, MODEL, []);
   const { adapters } = await prepared(t, { copilot });

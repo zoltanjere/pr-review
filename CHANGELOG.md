@@ -8,6 +8,8 @@ This project follows [semantic versioning](https://semver.org/). A pipeline or t
 - **Work-item scope:** for a PR that only says "Related to" (or "Part of", "Refs") its work item, verify judges only the criteria the PR claims or changes behaviour for, and rejects the rest as outside its stated scope.
 - **The PR's own docs count as stated:** behaviour that documentation added or changed by the PR describes as intended (a limitation, a failure mode, a recovery step) is rejected as already stated, like the PR body.
 - **How a change was made isn't evidence:** a claim such as "edited by hand" is rejected unless the resulting content is wrong.
+- **Tier A overflow is checked lightly:** tier A findings past the 6 rigorous slots take the 12 light slots first, ahead of tier B, instead of being left Unchecked. The total checked stays the same.
+- **Must fix needs a likely case:** gaps seen only on misuse, already caught by another check the PR adds, in rare environments, in guards against mistakes, or in docs and PR-description fields are Should fix.
 - **Questions don't assert:** verify no longer backs a Question with language or runtime internals it can't show in the repository, and rejects a Question the PR body already asks for.
 
 ## 0.9.0 (2026-11-23)

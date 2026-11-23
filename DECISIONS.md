@@ -131,7 +131,7 @@ Each entry has three parts:
   - **Session 2** checks tier A (at most 6, opened in code and cited) and tier B (at most 12, judged from the diff) in one go. Tier B was 8 until valid minors (unannounced scope changes, stale docs) kept landing in Unchecked while the slots went to findings that were then rejected; judged from the diff, four more cost little. It returns a JSON array of verdicts in order.
     - It gets only the diff sections of the cited files (`diffForFiles`), not the whole PR diff.
     - Optionally it runs on `checkModel`.
-  - Tier C is recorded as Rejected (style only) without a check. A finding that names a situation in which something goes wrong is never tier C, because the listing step once filed concrete failure cases (a failed push, a bad env value) as style. Findings over a tier's limit are recorded as **Unchecked**, which the digest never shows.
+  - Tier C is recorded as Rejected (style only) without a check. A finding that names a situation in which something goes wrong is never tier C, because the listing step once filed concrete failure cases (a failed push, a bad env value) as style. Tier A findings over its limit take the light-check slots first, ahead of tier B, so the total stays at 18. A security finding was once left Unchecked while two light slots went unused. Findings over the light limit are recorded as **Unchecked**, which the digest never shows.
   - The script validates the array (length, status and priority values, evidence present), retries once, and writes `verified.md` itself.
 - **Why:**
   - **One agent per finding was too expensive.** About 13 sessions at ~79k tokens each, roughly 1M tokens and 13 premium requests per PR. Each session re-read the full diff, and most checked findings ended up Rejected.

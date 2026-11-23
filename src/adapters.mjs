@@ -359,6 +359,7 @@ Decide for each:
 
 If Confirmed, give it one priority. This is the only place priority is decided:
 - Must fix: merging as-is causes wrong behaviour, a crash, a security hole, data loss or exposure of private data, breaks a caller, or misses a requirement the specification makes mandatory. A way for someone to deliberately get past a check the PR adds (a fail-open they can trigger on purpose) is a security hole when that check is a protection: access control, validation of untrusted input, a filter for private or harmful data, or a gate that decides a merge, release or deploy.
+  Must fix needs a case likely in normal use. A gap that shows only when an agent or user ignores instructions the PR gives, when a check the PR adds would catch it anyway, or in a rare environment, is Should fix. So is a gap in a guard against mistakes (not access control or validation of untrusted input), and missing documentation or PR-description fields.
 - Should fix: a real risk or gap with a concrete case that does not have to block the merge, such as risky logic without a test, a partly met requirement, an unclear failure, or a fail-open that only happens by accident in rare cases. A new way around a best-effort heuristic (a text scorer, a lint, a detector, an evaluation metric) is Should fix at most, and Minor when the code or its docs already state that it can be fooled the same way.
 - Minor: low impact, but a careful senior reviewer would still leave the comment and the author would likely act on it: a misleading message or name, a small duplication or dead code this PR adds, a missing test for logic this PR adds, or scope the PR does not mention.
   Below the bar, so Rejected with the reason "below the Minor bar": formatting or cosmetics; display-only polish nobody is misled by; inputs only tests or maintainers set; a failure mode that existed before this PR or follows a pattern the repository uses everywhere; and requests for features or hardening beyond the PR's purpose.
@@ -735,13 +736,16 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
       });
       const tierA = findings.filter((finding) => finding.tier === 'A');
       const tierB = findings.filter((finding) => finding.tier !== 'A' && finding.tier !== 'C');
-      const toCheck = [...tierA.slice(0, TIER_A_MAX), ...tierB.slice(0, TIER_B_MAX)];
+      // Tier A past its cap takes the light-check slots first, ahead of tier B,
+      // so a severe finding is never left unchecked while light slots go to minors.
+      const light = [...tierA.slice(TIER_A_MAX).map((finding) => ({ ...finding, tier: 'B' })), ...tierB];
+      const toCheck = [...tierA.slice(0, TIER_A_MAX), ...light.slice(0, TIER_B_MAX)];
       const skipped = [
         ...findings.filter((finding) => finding.tier === 'C').map((finding) => item(finding, {
           status: 'Rejected', priority: '-', kind: finding.kind ?? 'cleanup',
           finding: finding.claim, evidence: 'Not checked: listed as style or taste with no concrete failing case.',
         })),
-        ...[...tierA.slice(TIER_A_MAX), ...tierB.slice(TIER_B_MAX)].map((finding) => item(finding, {
+        ...light.slice(TIER_B_MAX).map((finding) => item(finding, {
           status: 'Unchecked', priority: '-', finding: finding.claim,
           evidence: 'Not checked: over the per-run limit for this tier.',
         })),

@@ -369,29 +369,32 @@ test('staging skills replaces a same-named skill shipped by the reviewed reposit
   for (const name of [...REVIEWERS, 'review-digest']) await access(join(root, '.github', 'skills', name, 'SKILL.md'));
 });
 
-test('verify checks tier A and B findings in one session, skips style and caps tiers', async (t) => {
+test('verify checks tier A and B findings in one session, skips style and caps tiers; tier A overflow takes light slots first', async (t) => {
   const findings = [
     ...Array.from({ length: 7 }, (_, i) => ({ title: `A${i}`, tier: 'A', raisedBy: ['code-review'], location: `src/a${i}.js:1`, claim: `a${i}`, fix: '' })),
-    { title: 'B0', tier: 'B', raisedBy: ['ponytail-review'], location: 'example.txt:1', claim: 'b0', fix: '' },
+    ...Array.from({ length: 12 }, (_, i) => ({ title: `B${i}`, tier: 'B', raisedBy: ['ponytail-review'], location: 'example.txt:1', claim: `b${i}`, fix: '' })),
     { title: 'C0', tier: 'C', raisedBy: ['code-review'], location: 'example.txt', claim: 'a smell', fix: '' },
   ];
+  const tiers = {};
   const checks = [];
   const copilot = (args) => {
     if (!isCheck(args)) return jsonl([message('Here you go:\n```json\n' + JSON.stringify(findings) + '\n```')]);
     const sent = JSON.parse(/Findings \(JSON[^\n]*\n(\[[\s\S]*?\n\])\n/.exec(promptOf(args))[1]);
     checks.push(sent.map((finding) => finding.title));
+    for (const finding of sent) tiers[finding.title] = finding.tier;
     return jsonl([message(JSON.stringify(sent.map((finding) => (finding.title === 'A0'
       ? { n: finding.n, status: 'Confirmed', priority: 'Must fix', kind: 'bug', location: finding.location, finding: 'crash', evidence: 'src/a0.js:1 crashes', fix: '' }
       : { n: finding.n, ...VERDICT, status: 'Rejected', priority: '-' })))) ]);
   };
   const { adapters } = await prepared(t, { copilot });
   const { markdown, findings: result } = await adapters.verify({ 'code-review': 'review' });
-  assert.deepEqual(checks, [['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'B0']]);
+  assert.deepEqual(checks, [['A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6', ...Array.from({ length: 11 }, (_, i) => `B${i}`)]]);
+  assert.deepEqual([tiers.A5, tiers.A6, tiers.B0], ['A', 'B', 'B']);
   assert.equal(result.find((item) => item.title === 'C0').status, 'Rejected');
   assert.match(result.find((item) => item.title === 'C0').evidence, /style/);
-  assert.equal(result.find((item) => item.title === 'A6').status, 'Unchecked');
+  assert.equal(result.find((item) => item.title === 'B11').status, 'Unchecked');
   assert.match(markdown, /^### 1\. A0 \(Confirmed\)$/m);
-  assert.match(markdown, /### 9\. A6 \(Unchecked\)/);
+  assert.match(markdown, /### 20\. B11 \(Unchecked\)/);
 });
 
 test('a check session with the wrong number of verdicts is retried once with a note', async (t) => {

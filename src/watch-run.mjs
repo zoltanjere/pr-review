@@ -43,10 +43,15 @@ export async function pollOnce(repo, adapters, { events, paths = PATHS, notify =
   const result = watchEvents({ repo, scan, memory, events, outcomes, now, skipped: (pr) => isSkipped(repo, pr, skips) });
   saveJson(paths.memory, MEMORY_FIELDS, result.memory);
   const failed = [];
+  const fallbacks = [];
   for (const notification of result.notifications) {
-    try { await notify(notification); } catch (error) { failed.push(`${notification.text}: ${error.message}`); }
+    try {
+      const used = await notify(notification);
+      // Shown, but by the fallback: log why, so a blocked terminal-notifier is visible.
+      if (typeof used === 'string' && used.includes('failed')) fallbacks.push(`${notification.text}: shown via ${used}`);
+    } catch (error) { failed.push(`${notification.text}: ${error.message}`); }
   }
-  return { scan, notifications: result.notifications, failed };
+  return { scan, notifications: result.notifications, failed, fallbacks };
 }
 
 // The lock an open interactive watch holds: { pid, beat }. Live while that
@@ -96,6 +101,7 @@ export async function runOnce(repo, adapters, { events, paths = PATHS, notify, n
     const result = await pollOnce(repo, adapters, { events, paths, notify, now });
     log(paths.log, `${repo}: ${result.notifications.length} notification${result.notifications.length === 1 ? '' : 's'}${result.notifications.map((n) => ` | ${n.text}`).join('')}`, { now });
     for (const failure of result.failed) log(paths.log, `notification failed: ${failure}`, { now });
+    for (const note of result.fallbacks ?? []) log(paths.log, `notification ${note}`, { now });
     return { skipped: false, notifications: result.notifications };
   } catch (error) {
     log(paths.log, `poll failed: ${error.message}`, { now });
@@ -161,6 +167,19 @@ export async function uninstallAgent({ dir = join(homedir(), 'Library', 'LaunchA
   return { file, existed };
 }
 
+// Sends a test notification and says what the user will get, so a Mac that
+// blocks terminal-notifier is found at install, not by missed notifications.
+export async function notificationMode(repo, notify) {
+  const test = { repo, number: 0, title: 'Test notification', url: `https://github.com/${repo}/pulls`, events: [], text: '✓ watch is set up' };
+  let used;
+  try { used = await notify(test); } catch (error) {
+    return `Notifications: not working (${error.message}). Check System Settings → Notifications and Focus.`;
+  }
+  if (used === 'terminal-notifier') return 'Notifications: clickable, opening the PR. A test notification was just sent.';
+  if (used === 'osascript') return 'Notifications: plain, clicking won\'t open the PR. For clickable ones: brew install terminal-notifier, then reviewpr watch --install again.';
+  return 'Notifications: plain, clicking won\'t open the PR (macOS blocks terminal-notifier on this Mac). A test notification was just sent.';
+}
+
 // `reviewpr watch [--once | --install | --uninstall]`. Without a flag it opens
 // the interactive app (mode B). `options` lets tests inject everything.
 export const WATCH_USAGE = 'Usage: reviewpr watch [--once | --install | --uninstall]';
@@ -185,8 +204,7 @@ export async function watchCommand(args, options = {}) {
     output.write(`Background watch installed: checks ${config.defaultRepository} every ${intervalMinutes} min for ${events.length === WATCH_EVENTS.length ? 'all events' : events.join(', ')}.\n`
       + `  Agent: ${file}\n  Log:   ${paths.log}\n`
       + '  After changing "watch" in config.json, run reviewpr watch --install again. Remove it with reviewpr watch --uninstall.\n');
-    const notifier = await (options.exec ?? run)('/usr/bin/which', ['terminal-notifier']).then(() => true, () => false);
-    if (!notifier) output.write('  terminal-notifier is not installed, so notifications can\'t open the PR: brew install terminal-notifier\n');
+    output.write(`  ${await notificationMode(config.defaultRepository, options.notify ?? showNotification)}\n`);
     return;
   }
   const adapters = options.adapters ?? createAdapters({ ...options, progress: () => {} });
@@ -237,6 +255,7 @@ export async function runApp(repo, adapters, {
         }
         notices.splice(3);
         for (const failure of result.failed) log(paths.log, `notification failed: ${failure}`, { now: checkedAt });
+        for (const note of result.fallbacks ?? []) log(paths.log, `notification ${note}`, { now: checkedAt });
         listener?.(result.scan.list);
         return result;
       } catch (error) {

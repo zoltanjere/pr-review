@@ -4,6 +4,8 @@ This project follows [semantic versioning](https://semver.org/). A pipeline or t
 
 ## Unreleased
 
+- **Watch notifications survive a blocked terminal-notifier:** when macOS refuses terminal-notifier, watch shows a plain osascript notification ending with "run reviewpr" instead of dropping it, and logs that it used the fallback.
+- **`watch --install` tests notifications:** it sends a test notification and reports the mode: clickable, plain, or not working.
 - **⚠️ recommends Comment only:** with Should fix as the worst finding, posting preselects Comment only, not Request changes. Only a Must fix recommends Request changes.
 - **Work-item scope:** for a PR that only says "Related to" (or "Part of", "Refs") its work item, verify judges only the criteria the PR claims or changes behaviour for, and rejects the rest as outside its stated scope.
 - **The PR's own docs count as stated:** behaviour that documentation added or changed by the PR describes as intended (a limitation, a failure mode, a recovery step) is rejected as already stated, like the PR body.

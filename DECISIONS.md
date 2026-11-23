@@ -374,7 +374,7 @@ Each entry has three parts:
     - **Merges:** a PR that leaves the open list is looked up with one `gh pr view` (`prOutcome`), only when a merge event is on. If the lookup fails, the PR is kept and looked up again on the next poll.
     - **Conflicts:** `mergeable: UNKNOWN` keeps the last known value, so only a real change to conflicting notifies.
     - **Skips:** skipped PRs don't notify about pushes or requests until their head changes, and the skip itself ends then.
-  - **Notifier:** `terminal-notifier` with `-open <PR URL>` and `-group <repo#N>`, or `osascript` without a link. Arguments are always passed as a list, never through a shell or AppleScript source.
+  - **Notifier:** `terminal-notifier` with `-open <PR URL>` and `-group <repo#N>`; when it's missing or macOS refuses it (it's ad-hoc signed, so some Macs never offer an Allow prompt), `osascript`, which needs no setup but can't open a link, so its text ends with "run reviewpr". `--install` sends a test notification and reports the mode. A signed notifier of our own would need an Apple developer account and notarization per release, so it isn't worth it. Arguments are always passed as a list, never through a shell or AppleScript source.
   - **Lock:** the open app holds `state/watch.lock` (pid plus a heartbeat every minute). `--once` does nothing while the lock is live. A lock whose process is gone, or whose heartbeat is older than 15 minutes, is stale.
   - **Failures:** a failed check is logged to `state/watch.log` and retried on the next interval. In the app it shows on the status line, the last list stays, and the third failure in a row sends one notification. Only a failed first load stops the app.
 - **Why:**

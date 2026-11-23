@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AGENT_LABEL, LOCK_STALE_MS, agentPlist, lockState, pollOnce, removeLock, runApp, runOnce, watchCommand, writeLock } from '../src/watch-run.mjs';
+import { AGENT_LABEL, LOCK_STALE_MS, agentPlist, lockState, notificationMode, pollOnce, removeLock, runApp, runOnce, watchCommand, writeLock } from '../src/watch-run.mjs';
 
 const REPO = 'acme/widget';
 const NOW = Date.parse('2026-11-23T12:00:00Z');
@@ -52,6 +52,15 @@ test('a failed notification is reported, not retried on the next poll', async (t
   await pollOnce(REPO, adapters, { events: ['new'], paths, notify: async () => {}, now: NOW });
   const result = await pollOnce(REPO, adapters, { events: ['new'], paths, notify: async () => { throw new Error('denied'); }, now: NOW });
   assert.deepEqual(result.failed, ['● #2 new PR from alice: denied']);
+});
+
+test('a notification shown by the fallback is reported apart from failures', async (t) => {
+  const { paths } = await folder(t);
+  const adapters = adaptersFor([[pr(1)], [pr(1), pr(2)]]);
+  await pollOnce(REPO, adapters, { events: ['new'], paths, notify: async () => 'terminal-notifier', now: NOW });
+  const result = await pollOnce(REPO, adapters, { events: ['new'], paths, notify: async () => 'osascript (terminal-notifier failed: allow it)', now: NOW });
+  assert.deepEqual(result.failed, []);
+  assert.deepEqual(result.fallbacks, ['● #2 new PR from alice: shown via osascript (terminal-notifier failed: allow it)']);
 });
 
 test('outcomes of departed PRs are looked up only with a merge event on', async (t) => {
@@ -105,19 +114,28 @@ test('watch --install writes and loads the agent from config; --uninstall remove
   const configPath = join(dir, 'config.json');
   await writeFile(configPath, JSON.stringify({ model: 'm', defaultRepository: REPO, watch: { events: ['new', 'merged'], intervalMinutes: 3 } }));
   const calls = [];
-  const exec = async (command, args) => { calls.push([command, ...args]); if (command === '/usr/bin/which') throw new Error('not found'); return ''; };
+  const exec = async (command, args) => { calls.push([command, ...args]); return ''; };
   let text = '';
   const output = { write: (chunk) => { text += chunk; } };
   const agentDir = join(dir, 'LaunchAgents');
-  await watchCommand(['--install'], { configPath, paths, agentDir, exec, output, node: '/n/node', path: '/usr/bin' });
+  const sent = [];
+  await watchCommand(['--install'], { configPath, paths, agentDir, exec, output, node: '/n/node', path: '/usr/bin', notify: async (n) => { sent.push(n.text); return 'osascript'; } });
   const plist = await readFile(join(agentDir, `${AGENT_LABEL}.plist`), 'utf8');
   assert.match(plist, /<integer>180<\/integer>/);
-  assert.deepEqual(calls.map((call) => call.slice(0, 2)), [['launchctl', 'bootout'], ['launchctl', 'bootstrap'], ['/usr/bin/which', 'terminal-notifier']]);
+  assert.deepEqual(calls.map((call) => call.slice(0, 2)), [['launchctl', 'bootout'], ['launchctl', 'bootstrap']]);
+  assert.deepEqual(sent, ['✓ watch is set up']);
   assert.match(text, /checks acme\/widget every 3 min for new, merged/);
   assert.match(text, /brew install terminal-notifier/);
   await watchCommand(['--uninstall'], { agentDir, exec, output });
   assert(!existsSync(join(agentDir, `${AGENT_LABEL}.plist`)));
   assert.match(text, /Removed the background watch/);
+});
+
+test('install reports the notification mode from a test notification', async () => {
+  assert.match(await notificationMode(REPO, async () => 'terminal-notifier'), /clickable/);
+  assert.match(await notificationMode(REPO, async () => 'osascript'), /plain.*brew install terminal-notifier/);
+  assert.match(await notificationMode(REPO, async () => 'osascript (terminal-notifier failed: allow it)'), /plain.*macOS blocks terminal-notifier/);
+  assert.match(await notificationMode(REPO, async () => { throw new Error('denied'); }), /not working \(denied\)/);
 });
 
 test('watch rejects unknown flags and bad event names before doing anything', async (t) => {

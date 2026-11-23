@@ -66,9 +66,9 @@ Prefer a terminal? `reviewpr watch` keeps the PR list open, refreshes it every f
 
 | Problem | Check |
 |---|---|
-| No notification ever appears | Run `terminal-notifier -message test`. If nothing shows, allow notifications in **System Settings → Notifications → terminal-notifier**. Focus or Do Not Disturb hides banners, but they still land in Notification Center. |
-| Banners vanish too fast | Set terminal-notifier's style to **Alerts** in the same settings page. |
-| Clicking a notification does nothing | terminal-notifier isn't installed, so `osascript` showed it: `brew install terminal-notifier`. |
+| Which notifications will I get? | `reviewpr watch --install` sends a test notification and says which mode works: **clickable** (terminal-notifier, clicking opens the PR) or **plain** (osascript, ends with "run reviewpr"; clicking can't open the PR). Plain needs no setup. You get it when terminal-notifier isn't installed, or when macOS blocks it, as some managed Macs do: it then never appears in **System Settings → Notifications**. |
+| No notification ever appears | Install says `Notifications: not working`. Check Focus or Do Not Disturb (banners still land in Notification Center), and **System Settings → Notifications**. |
+| Banners vanish too fast | Set terminal-notifier's style to **Alerts** in **System Settings → Notifications**. |
 | Is the background check running? | `tail state/watch.log` shows one line per check (`acme/widget: 0 notifications`). `poll failed: …` usually means `gh` isn't signed in: run `gh auth status`. |
 | `reviewpr: command not found` | Add `~/.local/bin` to your `PATH` (see Install). |
 | A setting in `config.json` didn't apply to the background check | Run `reviewpr watch --install` again. |

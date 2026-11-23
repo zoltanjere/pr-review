@@ -149,9 +149,10 @@ export function watchEvents({ repo, scan, memory = {}, events = WATCH_EVENTS, sk
   return { notifications, memory: { primed: { ...memory.primed, [repo]: memory.primed?.[repo] ?? new Date(now).toISOString() }, open } };
 }
 
-// Shows one notification. terminal-notifier when installed (clicking opens
-// the PR; one notification per PR, a newer one replaces it), otherwise
-// osascript, which can't open a link. Arguments are passed as a list, never
+// Shows one notification. terminal-notifier when installed and allowed
+// (clicking opens the PR; one notification per PR, a newer one replaces it),
+// otherwise osascript, which needs no setup but can't open a link. Returns
+// which one showed it. Arguments are passed as a list, never
 // through a shell or AppleScript source, so titles can't inject anything.
 const run = (command, args) => new Promise((resolve, reject) => {
   execFile(command, args, { timeout: 10_000 }, (error) => (error ? reject(error) : resolve()));
@@ -164,9 +165,15 @@ export async function notify(notification, { exec = run } = {}) {
       '-open', notification.url, '-group', prKey(notification.repo, notification.number), '-sound', 'default']);
     return 'terminal-notifier';
   } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
+    // Missing, or refused (macOS blocks it until notifications are allowed
+    // for terminal-notifier): fall back so the notification still shows.
+    try {
+      // Clicking this one can't open the PR, so the text says where to find it.
+      await exec('osascript', ['-e', 'on run argv', '-e', 'display notification (item 1 of argv) with title (item 2 of argv) subtitle (item 3 of argv)', '-e', 'end run',
+        `${notification.text} · run reviewpr`, title, notification.title]);
+    } catch (fallback) {
+      throw new Error(`terminal-notifier: ${error.message.trim()}; osascript: ${fallback.message.trim()}`);
+    }
+    return error?.code === 'ENOENT' ? 'osascript' : 'osascript (terminal-notifier failed: allow its notifications in System Settings)';
   }
-  await exec('osascript', ['-e', 'on run argv', '-e', 'display notification (item 1 of argv) with title (item 2 of argv) subtitle (item 3 of argv)', '-e', 'end run',
-    notification.text, title, notification.title]);
-  return 'osascript';
 }

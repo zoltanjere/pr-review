@@ -156,6 +156,11 @@ test('notify uses terminal-notifier with the PR link and a group per PR, osascri
   const [command, args] = fallback[1];
   assert.equal(command, 'osascript');
   // The title is an argument, never part of the AppleScript source.
-  assert.deepEqual(args.slice(-3), ['⟳ #61 fixes pushed', 'reviewpr · acme/widget', 'fix: "quotes" & $(stuff)']);
+  assert.deepEqual(args.slice(-3), ['⟳ #61 fixes pushed · run reviewpr', 'reviewpr · acme/widget', 'fix: "quotes" & $(stuff)']);
   assert(!args.slice(0, -3).some((arg) => arg.includes('quotes')));
+  // terminal-notifier installed but refused by macOS: still shown via osascript.
+  const refused = async (command) => { if (command === 'terminal-notifier') throw new Error('Notifications are not allowed for this application'); };
+  assert.match(await notify(notification, { exec: refused }), /^osascript \(terminal-notifier failed/);
+  const neither = async () => { throw new Error('no'); };
+  await assert.rejects(notify(notification, { exec: neither }), /terminal-notifier: no; osascript: no/);
 });

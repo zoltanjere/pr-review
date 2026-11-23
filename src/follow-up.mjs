@@ -1,0 +1,262 @@
+// Follow-up review: after your Request changes or Comment, check whether each
+// earlier finding was fixed or answered, instead of reviewing the whole PR
+// again. This module is pure: it reads a posted review, decides follow-up or
+// full review (and why), and writes the follow-up digest. src/adapters.mjs
+// reads GitHub and runs the models; src/review.mjs runs the steps.
+
+import { verdictFor, verdictLine } from './verdict.mjs';
+
+const SEVERITY = { '🔴': 'Must fix', '🟡': 'Should fix', '❓': 'Question' };
+
+// The commit a posted review covered and, for a follow-up, the one before:
+// "Reviewed at `a7e50c8`…" or "Follow-up at `def5678` of the review at `abc1234`…".
+const FOOTER = /<sub>(?:Reviewed|Follow-up) at `([0-9a-f]{7,40})`/;
+const OLD_FOOTER = /pr-review at `([0-9a-f]{7,40})`/;
+
+// The numbered findings of a digest as posted: the part before <details> and
+// the footer. Each is { n, severity, title, location, text }. Questions have
+// no bold title; their first line is the title. Minor items inside <details>
+// aren't read: they were optional for the author.
+export function postedFindings(body) {
+  const text = String(body ?? '').replace(/\r\n/g, '\n');
+  const fromReviewpr = FOOTER.test(text) || OLD_FOOTER.test(text);
+  const visible = text.split(/<details\b/i)[0].split(/\n---\n/)[0];
+  const findings = [];
+  let current = null;
+  for (const line of visible.split('\n')) {
+    const item = /^\s{0,3}(\d+)[.)]\s+(🔴|🟡|❓)\s*(.*)$/u.exec(line);
+    if (item) {
+      const [, n, icon, rest] = item;
+      const bold = /^\*\*(.+?)\*\*\s*(.*)$/.exec(rest);
+      current = { n: Number(n), severity: SEVERITY[icon], title: (bold ? bold[1] : rest).trim(), lines: bold && bold[2] ? [bold[2]] : [] };
+      findings.push(current);
+      continue;
+    }
+    if (/^#{2,4}\s|^>/.test(line) || /^\*\*Verdict:\*\*/.test(line)) { current = null; continue; }
+    if (current && line.trim()) current.lines.push(line.trim());
+  }
+  return {
+    fromReviewpr,
+    findings: findings.map(({ lines, ...finding }) => {
+      // The location line is the first body line when it starts with a `code` span (or a link around one).
+      const first = lines[0] ?? '';
+      const located = /^\[?`/.test(first);
+      const strip = (value) => value.replace(/\[(`[^`]+`)\]\([^)]*\)/g, '$1');
+      return {
+        ...finding,
+        location: located ? strip(first) : '',
+        text: strip(lines.slice(located ? 1 : 0).join(' ')).trim(),
+      };
+    }),
+  };
+}
+
+// The commit a posted review says it covered (7 to 40 characters), or null.
+export function postedHead(body) {
+  const text = String(body ?? '');
+  return (FOOTER.exec(text) ?? OLD_FOOTER.exec(text))?.[1] ?? null;
+}
+
+// How the reviewed commit relates to the PR head now, from GitHub's compare
+// status (old...new): "ahead" or "identical" keep the history; "diverged" or
+// "behind" mean it was rewritten; a missing commit means it's gone.
+export function ancestry(status) {
+  if (status === 'ahead' || status === 'identical') return 'kept';
+  if (status === 'diverged' || status === 'behind') return 'rewritten';
+  if (status === 'missing') return 'missing';
+  return 'unknown';
+}
+
+const at = (sha) => `\`${String(sha ?? '').slice(0, 7)}\``;
+
+// The decision, in code, before any model runs. The first row that applies
+// wins. Each fallback has one reason, said the same way everywhere:
+// `line` in the terminal, `short` on the picker row, `notice` to the author
+// in the digest. A first review (no earlier review of yours) has no reason.
+// - full: --full or `f` in the picker
+// - own: your own PR
+// - latest: your latest review on the PR ({ state, body, commit }), or null
+// - history: ancestry() of the reviewed commit against the PR head
+export function followUpMode({ full = false, own = false, latest = null, history = 'unknown' }) {
+  const fallback = (key, line, short, notice) => ({ mode: 'full', key, line: `Full review: ${line}`, short, notice });
+  if (full) return fallback('asked', 'you asked for one.', 'full review', null);
+  if (own || !latest || latest.state === 'DISMISSED') return { mode: 'full', key: own ? 'own' : 'first', line: null, short: null, notice: null };
+  if (latest.state === 'APPROVED') return { mode: 'full', key: 'approved', line: 'Full review: your last review was an approval.', short: null, notice: null };
+  const parsed = postedFindings(latest.body);
+  const head = latest.commit ?? postedHead(latest.body);
+  if (!parsed.fromReviewpr) {
+    return fallback('hand-written', 'your last review wasn\'t made by reviewpr, so its findings can\'t be read.', 'hand-written review', null);
+  }
+  if (!parsed.findings.length) {
+    return fallback('no-findings', 'your last review had no findings to follow up.', 'no findings', null);
+  }
+  if (history === 'rewritten') {
+    return fallback('rewritten', `the commit you reviewed (${at(head)}) is no longer in the PR's history (rebase or force-push), so the earlier findings can't be checked line by line.`, 'history rewritten',
+      `🔁 **Full re-review:** the commit reviewed last time (${at(head)}) is no longer in the PR's history after a rebase or force-push, so the whole PR was reviewed again. Earlier points may come back in different words.`);
+  }
+  if (history === 'missing') {
+    return fallback('missing', `the commit you reviewed (${at(head)}) is no longer available on GitHub.`, 'commit gone',
+      `🔁 **Full re-review:** the commit reviewed last time (${at(head)}) is no longer available, so the whole PR was reviewed again. Earlier points may come back in different words.`);
+  }
+  return { mode: 'follow-up', key: 'follow-up', head, findings: parsed.findings, line: null, short: null, notice: null };
+}
+
+// The terminal line for a follow-up, before the first model step.
+export function followUpLine({ head, commits, findings }) {
+  const count = commits ? `${commits} new commit${commits === 1 ? '' : 's'}` : 'no new commits';
+  return `Follow-up of your review at ${at(head)}: ${count}, ${findings} finding${findings === 1 ? '' : 's'} to check.`;
+}
+
+// --- The follow-up check's answer -------------------------------------------
+
+export const FOLLOW_UP_STATUSES = ['Fixed', 'Partly fixed', 'Answered', 'Still open'];
+
+// One status per earlier finding, in order. Returns an error message, or null.
+export function checkStatuses(results, count) {
+  if (!Array.isArray(results) || results.length !== count) return `returned ${Array.isArray(results) ? results.length : 'no'} statuses for ${count} findings`;
+  for (const result of results) {
+    if (!FOLLOW_UP_STATUSES.includes(result?.status)) return 'returned an unknown status';
+    if (result.status === 'Answered' && !['accepted', 'disputed'].includes(result.answer)) return 'returned an Answered status without "accepted" or "disputed"';
+    if (typeof result.evidence !== 'string' || !result.evidence.trim()) return 'returned a status without evidence';
+  }
+  return null;
+}
+
+// Fixed, or answered convincingly: resolved. Everything else stays open,
+// a disputed answer and a partial fix included.
+export const resolved = (status) => status.status === 'Fixed' || (status.status === 'Answered' && status.answer === 'accepted');
+
+// --- The follow-up digest ----------------------------------------------------
+
+const ICON = { 'Must fix': '🔴', 'Should fix': '🟡', Question: '❓' };
+const ORDER = ['Must fix', 'Should fix', 'Question'];
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const quote = (text) => `"${String(text ?? '').replace(/\s+/g, ' ').trim()}"`;
+
+// The new findings' numbered items (from the review-digest skill) under one
+// heading, numbered after the still-open ones; their minors in a separate
+// <details>. Returns { visible, details }.
+function newSection(body, start) {
+  const text = String(body ?? '').trim();
+  if (!text || /^`?Nothing to raise\.?`?$/i.test(text)) return { visible: '', details: '' };
+  const cut = text.search(/<details\b/i);
+  const visible = (cut < 0 ? text : text.slice(0, cut)).split('\n').filter((line) => !/^#{2,4}\s/.test(line));
+  let n = start;
+  const numbered = visible.map((line) => line.replace(/^(\s{0,3})\d+([.)]\s+(?:🔴|🟡|❓))/u, (match, indent, rest) => `${indent}${n++}${rest}`))
+    .join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  const details = cut < 0 ? '' : text.slice(cut).replace(/<summary>([^<]*)<\/summary>/i, '<summary>In the new commits: $1</summary>').trim();
+  return { visible: numbered, details };
+}
+
+// The notice to the PR author, under the verdict: what was re-reviewed and
+// what wasn't. Written from templates so it always matches what ran.
+export function reReviewNotice({ old, head, commits, total, chained = false, merged = null, counts }) {
+  const since = `${chained ? 'the follow-up' : 'the review'} at ${at(old)}`;
+  const points = `${plural(total, 'point')} ${chained ? 'still open' : 'raised'} last time`;
+  const lines = [
+    `🔁 **Re-review of the changes since ${since}**${commits ? ` (${plural(commits, 'new commit')}, ${at(old)} → ${at(head)})` : ''}.`,
+    commits
+      ? `This review only checks the ${points}, whether ${total === 1 ? 'it' : 'each'} was fixed or answered, and whether the ${plural(commits, 'new commit')} introduce${commits === 1 ? 's' : ''} a new problem. The rest of the PR wasn't reviewed again, and points from last time aren't re-raised in new words.`
+      : `This review only checks the replies to the ${points}; there are no new commits since then. The rest of the PR wasn't reviewed again.`,
+  ];
+  if (merged) lines.push(`Changes merged in from \`${merged}\` weren't reviewed.`);
+  const parts = [
+    counts.fixed && `${counts.fixed} fixed`,
+    counts.answered && `${counts.answered} answered`,
+    counts.open && `${counts.open} still open`,
+    counts.added && `${counts.added} new`,
+  ].filter(Boolean);
+  const tail = commits && !counts.added ? 'no new problems in the new commits' : null;
+  lines.push(`Result: ${[...parts, tail].filter(Boolean).join(', ') || 'nothing to report'}.`);
+  return lines.map((line) => `> ${line}`).join('\n');
+}
+
+// The whole follow-up digest: verdict, notice, still open, new, resolved.
+// - previous: the earlier findings (postedFindings), in the order checked
+// - statuses: the follow-up check's answer, one per earlier finding
+// - newBody: the review-digest skill's body for the new findings ('' if none)
+// - newFindings: verify's findings for the new commits
+// - facts: { old, head, commits, chained, merged }
+export function followUpDigest({ previous, statuses, newBody = '', newFindings = [], facts }) {
+  const items = previous.map((finding, i) => ({ finding, status: statuses[i] }));
+  const open = items.filter(({ status }) => !resolved(status))
+    .sort((a, b) => ORDER.indexOf(a.finding.severity) - ORDER.indexOf(b.finding.severity));
+  const done = items.filter(({ status }) => resolved(status));
+  const added = newFindings.filter((f) => f.status === 'Question' || (f.status === 'Confirmed' && f.priority !== 'Minor'));
+  const counts = {
+    fixed: done.filter(({ status }) => status.status === 'Fixed').length,
+    answered: done.filter(({ status }) => status.status === 'Answered').length,
+    open: open.length,
+    added: added.length,
+  };
+
+  // The verdict, from code: open earlier findings keep their severity.
+  const all = [
+    ...open.map(({ finding }) => (finding.severity === 'Question' ? { status: 'Question', priority: '-' } : { status: 'Confirmed', priority: finding.severity })),
+    ...newFindings,
+  ];
+  const level = verdictFor(all).level;
+  const rest = !open.length && !added.length
+    ? `${previous.length === 1 ? 'The earlier point is' : `All ${previous.length} earlier points`} resolved${facts.commits ? ', nothing new' : ''}.`
+    : `${[open.length && `${open.length} still open`, added.length && `${added.length} new`].filter(Boolean).join(', ')}.`;
+
+  const sections = [verdictLine(level, rest), reReviewNotice({ ...facts, total: previous.length, counts })];
+  if (open.length) {
+    sections.push(['### Still open from the last review', ...open.map(({ finding, status }, i) => {
+      const why = status.status === 'Answered'
+        ? `Reply: ${quote(status.reply)} This doesn't settle it: ${status.evidence}`
+        : status.status === 'Partly fixed' ? `Partly fixed: ${status.remaining || status.evidence}` : (status.remaining || finding.text);
+      const head = finding.severity === 'Question' ? `${i + 1}. ❓ ${finding.title}` : `${i + 1}. ${ICON[finding.severity]} **${finding.title}**`;
+      return [head, finding.location && `   ${finding.location}`, `   ${why}`].filter(Boolean).join('\n');
+    })].join('\n'));
+  }
+  const fresh = newSection(newBody, open.length + 1);
+  if (fresh.visible) sections.push(`### New in the fixes\n${fresh.visible}`);
+  if (done.length) {
+    const summary = [counts.fixed && `${counts.fixed} fixed`, counts.answered && `${counts.answered} answered`].filter(Boolean).join(', ');
+    sections.push([`<details><summary>Resolved since the last review: ${summary}</summary>`, '',
+      ...done.map(({ finding, status }) => {
+        const title = finding.title.replace(/[.:]$/, '');
+        return status.status === 'Fixed' ? `- ✅ **Fixed:** ${title}: ${status.evidence}` : `- 💬 **Answered:** ${title}: ${quote(status.reply)} ${status.evidence}`;
+      }),
+      '</details>'].join('\n'));
+  }
+  if (fresh.details) sections.push(fresh.details);
+  return sections.join('\n\n');
+}
+
+// A full review that replaced a follow-up: the reason, to the author, right
+// under the verdict line.
+export function withNotice(digest, notice) {
+  if (!notice) return digest;
+  const text = String(digest ?? '');
+  const match = /^\s*\*\*Verdict:\*\*[^\n]*(?:\n|$)/.exec(text);
+  const quoted = notice.split('\n').map((line) => `> ${line}`).join('\n');
+  if (!match) return `${quoted}\n\n${text}`;
+  return `${match[0].trimEnd()}\n\n${quoted}\n\n${text.slice(match[0].length).trim()}`.trim();
+}
+
+// "2 fixed, 1 answered, 1 still open", for the step's finish line.
+export function statusSummary(statuses) {
+  const count = (test) => statuses.filter(test).length;
+  return [
+    [count((s) => s.status === 'Fixed'), 'fixed'],
+    [count((s) => s.status === 'Answered' && s.answer === 'accepted'), 'answered'],
+    [count((s) => !resolved(s)), 'still open'],
+  ].filter(([n]) => n).map(([n, word]) => `${n} ${word}`).join(', ') || 'nothing to check';
+}
+
+// The saved follow-up stage: each earlier finding with its status and evidence.
+export function formatFollowUp(findings, statuses) {
+  return ['# Follow-up check', ...findings.map((finding, i) => {
+    const status = statuses[i];
+    return [
+      `### ${i + 1}. ${finding.title} (${status.status}${status.status === 'Answered' ? `, ${status.answer}` : ''})`,
+      `- Severity: ${finding.severity}`,
+      `- Location: ${finding.location || '-'}`,
+      status.reply ? `- Reply: ${quote(status.reply)}` : null,
+      `- Evidence: ${status.evidence}`,
+      status.remaining ? `- Remaining: ${status.remaining}` : null,
+    ].filter(Boolean).join('\n');
+  })].join('\n\n');
+}

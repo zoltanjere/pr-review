@@ -38,9 +38,12 @@ export function reviewOptions({ findings, reviewedHead, status, digest }) {
   return { allowed, recommended: allowed.includes(wanted) ? wanted : 'comment', notes, level: verdict.level };
 }
 
-export function reviewBody(digest, head) {
+// The footer records the commit reviewed (the picker and the next follow-up
+// read it back); a follow-up also names the review it followed.
+export function reviewBody(digest, head, previous = null) {
   const commit = head ? ` at \`${head.slice(0, 7)}\`` : '';
-  return `${digest.trim()}\n\n---\n<sub>Reviewed${commit} with AI assistance. Each finding was checked against the code.</sub>\n`;
+  const lead = previous ? `Follow-up${commit} of the review at \`${previous.slice(0, 7)}\`, with AI assistance` : `Reviewed${commit} with AI assistance`;
+  return `${digest.trim()}\n\n---\n<sub>${lead}. Each finding was checked against the code.</sub>\n`;
 }
 
 // What was reviewed, and how, shown once at the top of the decision screen.
@@ -121,7 +124,7 @@ export async function publishInTerminal(result, { adapters, input = process.stdi
       await writeFile(result.digestPath, `${digest.trim()}\n`, { mode: 0o600 });
       output.write(`${c.yellow('!')} ${own ? 'Verdict line marked as a self-review' : 'Verdict line changed to match your choice'}: ${aligned.line}\n`);
     }
-    await runSteps([{ title: `Posting review as ${EVENTS[event]}`, run: () => adapters.postReview(result.pr, event, reviewBody(digest, result.head)) }], { live, reporter });
+    await runSteps([{ title: `Posting review as ${EVENTS[event]}`, run: () => adapters.postReview(result.pr, event, reviewBody(digest, result.head, result.followUp?.old)) }], { live, reporter });
     output.write(`${c.green('✔')} Posted to ${prName} as ${c.bold(EVENTS[event])}.\n`);
     return { posted: event };
   }

@@ -132,6 +132,21 @@ test('choosePr checks the clone, lists and returns the picked PR URL', async (t)
   assert.match(empty.text(), /Nothing to review in acme\/widget \(1 open; hidden: 1 draft\)/);
 });
 
+test('f picks the highlighted PR for a full review; Enter leaves the choice to the run', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'picker-state-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const adapters = { findClone: async () => {}, viewer: async () => ME, listOpenPrs: async () => [pr(42), pr(43)], reviewCommit: async () => null };
+  for (const [keys, full] of [[['f'], true], [['return'], false]]) {
+    const term = fakeTerminal();
+    let choice;
+    const url = choosePr('acme/widget', adapters, { ...term, statePath: join(dir, 'picker.json'), onPick: (picked) => { choice = picked; } });
+    term.press(...keys);
+    assert.match(await url, /^https:\/\/github\.com\/acme\/widget\/pull\/4[23]$/);
+    assert.deepEqual(choice, { full });
+    assert.match(term.text(), /Enter review · f full review · s skip/);
+  }
+});
+
 test('without a URL, main needs a terminal and defaultRepository, then reviews the picked PR', async (t) => {
   const { main } = await import('../src/review.mjs');
   const dir = await mkdtemp(join(tmpdir(), 'pick-test-'));
@@ -155,13 +170,16 @@ const statePr = (number, extra = {}) => ({
   latestReviews: [], reviewRequests: [], createdAt: hoursAgo(24 * 30), updatedAt: hoursAgo(24 * 3), ...extra,
 });
 
+// A posted reviewpr review with one finding, so a follow-up is possible.
+const POSTED = '### Must fix\n1. 🔴 **Empty input crashes**\n   `a.js:1`\n   Fix: x.\n\n---\n<sub>Reviewed at `a7e50c8` with AI assistance.</sub>';
+
 test('each PR gets one state, first match wins', async () => {
   const { prState } = await import('../src/select.mjs');
   const older = 'b'.repeat(40);
   const newer = { count: 2, last: hoursAgo(2) };
   const asked = statePr(2, { createdAt: hoursAgo(1), reviewRequests: [{ login: ME }] });
   const cases = [
-    [prState(statePr(1), ME, { mine: { state: 'CHANGES_REQUESTED' }, covered: older.slice(0, 7), newer, now: NOW }), 'fixes', '2 new commits'],
+    [prState(statePr(1), ME, { mine: { state: 'CHANGES_REQUESTED', body: POSTED }, covered: older.slice(0, 7), newer, now: NOW }), 'fixes', '2 new commits'],
     [prState(statePr(1), ME, { mine: { state: 'APPROVED' }, covered: older, newer, now: NOW }), 'approved', 'approved · 2 new commits'],
     [prState(asked, ME, { now: NOW }), 'requested', 'requested'],
     [prState(statePr(3, { createdAt: hoursAgo(0.5) }), ME, { now: NOW }), 'new', ''],
@@ -239,7 +257,7 @@ test('s skips a PR until its head changes, a shows skipped PRs again', async (t)
 
 test('new commits are counted only for PRs that changed since your review', async () => {
   const calls = [];
-  const changed = statePr(1, { headRefOid: 'e'.repeat(40), latestReviews: [review('CHANGES_REQUESTED', 'Reviewed at `a7e50c8` with AI assistance.')] });
+  const changed = statePr(1, { headRefOid: 'e'.repeat(40), latestReviews: [review('CHANGES_REQUESTED', POSTED)] });
   const { prs } = await candidatePrs([changed, statePr(2)], ME, {
     now: NOW,
     commitsSince: async (number, base, head) => { calls.push([number, base, head.slice(0, 1)]); return { count: 3, last: hoursAgo(2) }; },
@@ -303,4 +321,19 @@ test('within a group, rows follow the age column, youngest first, even when upda
   const { prs } = await candidatePrs([fresh(2, 5, 4), fresh(1, 1, 0.1), fresh(3, 3, 2), statePr(4, { createdAt: undefined, updatedAt: undefined })], ME, { now: NOW });
   assert.deepEqual(prs.filter((pr) => pr.state.key === 'new').map((pr) => [pr.number, pr.state.ageMs / 3_600_000]), [[1, 1], [3, 3], [2, 5]]);
   assert.equal(prs.at(-1).number, 4, 'an unknown age sorts last');
+});
+
+test('a Fixes pushed row says when Enter will run a full review instead of a follow-up', async () => {
+  const { prState } = await import('../src/select.mjs');
+  const older = 'b'.repeat(40);
+  const label = (mine, newer) => prState(statePr(1), ME, { mine, covered: older, newer: { count: 2, last: hoursAgo(2), ...newer }, now: NOW });
+  const fine = label({ state: 'CHANGES_REQUESTED', body: POSTED }, { status: 'ahead' });
+  assert.deepEqual([fine.label, fine.followUp], ['2 new commits', true]);
+  assert.equal(label({ state: 'CHANGES_REQUESTED', body: POSTED }, { status: 'diverged' }).label, '2 new commits · full review: history rewritten');
+  assert.equal(label({ state: 'COMMENTED', body: POSTED }, { status: 'missing', count: null }).label, 'new commits · full review: commit gone');
+  assert.equal(label({ state: 'CHANGES_REQUESTED', body: 'please fix the null check' }, {}).label, '2 new commits · full review: hand-written review');
+  assert.equal(label({ state: 'COMMENTED', body: '**Verdict:** ✅ Ship. Only minor items.\n\n---\n<sub>Reviewed at `a7e50c8` with AI assistance.</sub>' }, {}).label, '2 new commits · full review: no findings');
+  // The footer of a follow-up is read back as the reviewed commit.
+  const { reviewedHead } = await import('../src/select.mjs');
+  assert.equal(reviewedHead({ body: '<sub>Follow-up at `def5678` of the review at `abc1234`, with AI assistance.</sub>' }), 'def5678');
 });

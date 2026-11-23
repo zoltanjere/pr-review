@@ -295,10 +295,11 @@ export async function runApp(repo, adapters, {
   };
   try {
     for (;;) {
-      const url = await pick(repo, adapters, { input, output, watch, statePath: paths.picker });
+      let full = false;
+      const url = await pick(repo, adapters, { input, output, watch, statePath: paths.picker, onPick: (choice) => { full = Boolean(choice?.full); } });
       if (!url) break;
       try {
-        await review(url);
+        await review(url, { full });
       } catch (error) {
         output.write(`${error.message}\n`);
       }

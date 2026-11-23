@@ -27,6 +27,7 @@ function counts(findings) {
 }
 
 const lineFor = (level, rest) => `**Verdict:** ${LEVELS[level].icon} ${LEVELS[level].label}. ${rest}`;
+export const verdictLine = lineFor;
 
 export function verdictFor(findings = []) {
   const has = (priority) => findings.some((item) => item.status === 'Confirmed' && item.priority === priority);

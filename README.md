@@ -45,6 +45,7 @@ reviewpr watch --install                          # get notified in the backgrou
 - **At the end** you see the verdict (🔴 Fix before merge, ⚠️ Changes recommended or ✅ Ship), the findings and what verify dropped and why.
 - **Your choice:** keep it local (the default), post it as a review, or edit it first. Posting asks you twice, and nothing is ever posted without a terminal.
 - **Your checkouts:** it reviews in a throwaway clone, so your own clones are never touched.
+- **After fixes:** reviewing a PR you requested changes on or commented on again runs a quicker **follow-up review**: it checks only your earlier points and the new commits, and tells the author so. See [Follow-up reviews](#follow-up-reviews).
 
 **After `reviewpr watch --install`:**
 - **Right away:** a background check is installed and runs once. That first check only records the PRs that are already open, so **you see nothing at first. That's expected.**
@@ -83,6 +84,7 @@ Prefer a terminal? `reviewpr watch` keeps the PR list open, refreshes it every f
 reviewpr <pr-url>              # review one PR (or: node src/review.mjs <pr-url>)
 reviewpr                       # pick from defaultRepository's open PRs
 reviewpr --yes <url>           # no prompts, never posts; the digest goes to stdout
+reviewpr --full <url>          # a full review, even where a follow-up is possible
 reviewpr watch                 # the picker, kept open, with notifications
 reviewpr watch --install       # check in the background (launchd)
 reviewpr watch --uninstall     # remove the background check
@@ -121,6 +123,7 @@ Use model IDs exactly as Copilot's `/model` lists them.
 acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
   Fixes pushed
 ❯ ⟳ #61  2h   octo-dev   fix: resume uploads after a dropped connection  3 new commits
+  ⟳ #57  1d   sam-codes  feat: retry budget per tenant                   1 new commit · full review: history rewritten
   Asked for you
   ★ #66  5h   lee-park   chore: bump the test runner                     requested
   New since you looked
@@ -135,7 +138,7 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
 ```
 
 - **Groups, most urgent first:**
-  - **⟳ Fixes pushed:** you requested changes or commented, and the author has pushed since.
+  - **⟳ Fixes pushed:** you requested changes or commented, and the author has pushed since. Enter runs a [follow-up review](#follow-up-reviews). When one isn't possible, the row says so (`full review: history rewritten`, `commit gone`, `no findings` or `hand-written review`).
   - **★ Asked for you:** you're a requested reviewer.
   - **● New since you looked / ↑ Updated since you looked:** opened or updated since you last opened the picker for this repository (on a first visit: the last 24 h). The header says when that was: `last looked 2d ago`.
   - **↑ Approved, new commits:** you approved, and commits came in after.
@@ -148,7 +151,7 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
   - Details such as `3 new commits` follow the titles, and rows are at most 100 columns wide, so nothing drifts to the far edge of a wide terminal.
 - **Colours:** the icon and the group heading carry the state's colour. Without colour, the icons, ages and labels carry the same information.
 - **Hidden:** other people's drafts and bot PRs.
-- **Keys:** `↑`/`↓` move, Enter reviews, and `q` cancels. `s` skips the highlighted PR until its author pushes a new commit, and `a` shows skipped PRs again (press `s` on one to unskip it).
+- **Keys:** `↑`/`↓` move, Enter reviews (a follow-up where possible), `f` runs a full review instead, and `q` cancels. `s` skips the highlighted PR until its author pushes a new commit, and `a` shows skipped PRs again (press `s` on one to unskip it).
 - **Where this is kept:** skips and the time you last looked live in `state/picker.json` on your machine only, which is git-ignored. Nothing is written to GitHub.
 
 ### Watch
@@ -229,6 +232,51 @@ What next?
 - **No terminal:** without a terminal, or with `--yes`, nothing is ever posted.
 
 [`DECISIONS.md`](DECISIONS.md) explains why each step is built the way it is.
+
+### Follow-up reviews
+
+When you review a PR again after your **Request changes** or **Comment**, reviewpr checks what changed instead of reviewing everything again:
+
+```
+prepare ── your posted review: its findings and the commit it covered
+           the new code since then (only the PR's own files) and the replies since then
+   ├─ follow-up check   each earlier finding: Fixed, Partly fixed, Answered or Still open   ┐ in parallel
+   └─ scan              the new commits only: problems the fixes introduce                ┘
+verify  ── checks the scan's findings, as in a full review
+digest  ── verdict, a re-review notice for the author, still open, new, resolved
+```
+
+- **Before any model runs,** the terminal says which it will be: `Follow-up of your review at abc1234: 2 new commits, 4 findings to check.`, or a full review and why. Ctrl-C still cancels.
+- **Answers count:** when the author replied instead of changing the code, the check quotes the reply and judges it against the code: accepted (resolved) or disputed (still open).
+- **The comment tells the author what was re-reviewed:**
+  ```
+  **Verdict:** ⚠️ Changes recommended. 1 still open, 1 new.
+
+  > 🔁 **Re-review of the changes since the review at `abc1234`** (2 new commits, `abc1234` → `def5678`).
+  > This review only checks the 4 points raised last time, whether each was fixed or answered, and whether
+  > the 2 new commits introduce a new problem. The rest of the PR wasn't reviewed again, and points from
+  > last time aren't re-raised in new words.
+  > Result: 2 fixed, 1 answered, 1 still open, 1 new.
+
+  ### Still open from the last review
+  ### New in the fixes
+  <details> Resolved since the last review: 2 fixed, 1 answered </details>
+  ```
+- **Verdict:** 🔴 when a Must fix is still open, disputed or new; ⚠️ when only Should fix items or questions are open; ✅ when everything is resolved and nothing new came up.
+- **Cost:** two sessions plus a small verify, instead of two full reviewers plus verify.
+- **Chains:** the posted footer reads `Follow-up at def5678 of the review at abc1234`, so the next follow-up checks only what was still open.
+- **When it runs a full review instead,** and says why in the terminal, on the picker row and to the author under the verdict:
+
+  | Situation | Why |
+  |---|---|
+  | `--full`, or `f` in the picker | you asked for one |
+  | your last review was an approval | there's nothing to follow up; new commits get a full look |
+  | your last review wasn't posted by reviewpr | its findings can't be read |
+  | your last review had no numbered findings | nothing to follow up |
+  | a rebase or force-push removed the reviewed commit | earlier findings can't be checked line by line |
+  | GitHub no longer has the reviewed commit | the same |
+
+- **Not tracked:** minor items from the earlier review (they were optional), and reviews by other people.
 
 ### Output
 

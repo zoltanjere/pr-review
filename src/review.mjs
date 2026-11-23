@@ -12,8 +12,9 @@ import { createRouter, isLive, runSteps } from './steps.mjs';
 import { printSummary } from './confirm.mjs';
 import { publishInTerminal } from './publish.mjs';
 import { watchCommand } from './watch-run.mjs';
+import { followUpDigest, followUpLine, formatFollowUp, statusSummary, withNotice } from './follow-up.mjs';
 
-const STAGES = [...REVIEWERS, 'verified', 'digest'].join('|');
+const STAGES = [...REVIEWERS, 'follow-up', 'scan', 'verified', 'digest'].join('|');
 
 export function parsePrUrl(input) {
   const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/([1-9][0-9]*)\/?$/.exec(input ?? '');
@@ -68,7 +69,7 @@ const words = (text) => String(text).split(/\s+/).filter(Boolean).length;
 // The phases are declared as steps (src/steps.mjs): listr2 in a terminal
 // (`live`), "[progress]" lines otherwise. `router` sends the adapters' own
 // progress lines to the step that is running.
-export async function runPipeline(url, { root, adapters, progress, now = new Date(), live = false, router }) {
+export async function runPipeline(url, { root, adapters, progress, now = new Date(), live = false, router, full = false }) {
   const reporter = toReporter(progress);
   const pr = parsePrUrl(url);
   const date = now;
@@ -91,58 +92,126 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
   let verified;
   let digest;
   let reviewError;
+  // Follow-up or full review, decided while preparing (src/follow-up.mjs).
+  let plan = { mode: 'full', line: full ? 'Full review: you asked for one.' : null, notice: null };
+  let statuses;
+  let scanText = '';
   const reviews = {};
   const failures = [];
+  const visibleWords = (text) => `${words(text.split(/<details\b/i)[0])} visible words`;
+  const fullSteps = () => [
+    // Side by side; every successful review is saved before a failure stops the run.
+    {
+      title: 'Reviews', concurrent: true,
+      steps: REVIEWERS.map((name) => ({
+        title: name,
+        run: async (ui) => {
+          use(ui);
+          try {
+            const text = await adapters.review(name, checkout);
+            await save(name, text);
+            reviews[name] = text;
+            return detail(`${words(text)} words`, name);
+          } catch (error) {
+            failures.push(`${name}: ${error.message ?? error}`);
+            throw error;
+          }
+        },
+      })),
+    },
+    {
+      title: 'Verify', section: true,
+      run: async (ui) => {
+        use(ui);
+        verified = await adapters.verify(Object.fromEntries(REVIEWERS.map((name) => [name, reviews[name]])));
+        await save('verified', verified.markdown);
+      },
+    },
+    {
+      title: 'Digest',
+      steps: [{
+        title: 'writing digest',
+        run: async (ui) => {
+          use(ui);
+          // A full review that replaced a follow-up says why, to the author.
+          digest = withNotice(await adapters.digest(verified.markdown, verified.findings), plan.notice);
+          await save('digest', digest);
+          return detail(visibleWords(digest), 'review-digest');
+        },
+      }],
+    },
+  ];
+  // Checks the earlier findings and scans only the new commits.
+  const followUpSteps = () => [
+    {
+      title: 'Follow-up', concurrent: true,
+      steps: [
+        {
+          title: `checking ${plan.findings.length} earlier finding${plan.findings.length === 1 ? '' : 's'}`,
+          run: async (ui) => {
+            use(ui);
+            statuses = await adapters.followUp(plan);
+            await save('follow-up', formatFollowUp(plan.findings, statuses));
+            return detail(statusSummary(statuses), 'checking earlier findings');
+          },
+        },
+        ...(plan.newDiffText?.trim() ? [{
+          title: 'scanning the new commits',
+          run: async (ui) => {
+            use(ui);
+            scanText = await adapters.scan(plan);
+            await save('scan', scanText);
+            return detail(`${words(scanText)} words`, 'scanning new commits');
+          },
+        }] : []),
+      ],
+    },
+    {
+      title: 'Verify', section: true,
+      run: async (ui) => {
+        use(ui);
+        if (!scanText.trim() || /^\s*No findings\.?\s*$/i.test(scanText)) {
+          ui.log(plan.newDiffText?.trim() ? 'no new findings to check' : 'no new code to check');
+          verified = { markdown: '# Verified review\n\nNo findings.', findings: [] };
+        } else {
+          verified = await adapters.verify({ scan: scanText });
+        }
+        await save('verified', verified.markdown);
+      },
+    },
+    {
+      title: 'Digest',
+      steps: [{
+        title: 'writing digest',
+        run: async (ui) => {
+          use(ui);
+          // The skill writes only the new findings; the rest comes from code.
+          const worth = verified.findings.some((f) => f.status === 'Question' || f.status === 'Confirmed');
+          const newBody = worth ? (await adapters.digest(verified.markdown, verified.findings)).replace(/^\s*\*\*Verdict:\*\*[^\n]*\n*/, '') : '';
+          digest = await adapters.linkify(followUpDigest({
+            previous: plan.findings, statuses, newBody, newFindings: verified.findings,
+            facts: { old: plan.old, head: plan.head, commits: plan.commits, chained: plan.chained, merged: plan.merged },
+          }));
+          await save('digest', digest);
+          return detail(visibleWords(digest), worth ? 'review-digest' : undefined);
+        },
+      }],
+    },
+  ];
   try {
-    await runSteps([
-      {
-        title: `Preparing ${pr.owner}/${pr.repo}#${pr.number}`, section: true,
-        run: async (ui) => {
-          use(ui);
-          checkout = await adapters.prepare(pr);
-          reservation = await reserveRun(directory, date);
-        },
+    await runSteps([{
+      title: `Preparing ${pr.owner}/${pr.repo}#${pr.number}`, section: true,
+      run: async (ui) => {
+        use(ui);
+        checkout = await adapters.prepare(pr);
+        reservation = await reserveRun(directory, date);
+        if (adapters.followUpPlan) plan = await adapters.followUpPlan({ full });
+        // Said before any model runs, so a surprise can still be cancelled.
+        if (plan.mode === 'follow-up') ui.reporter.note(followUpLine({ head: plan.old, commits: plan.commits, findings: plan.findings.length }));
+        else if (plan.line) ui.reporter.warn(plan.line);
       },
-      // Side by side; every successful review is saved before a failure stops the run.
-      {
-        title: 'Reviews', concurrent: true,
-        steps: REVIEWERS.map((name) => ({
-          title: name,
-          run: async (ui) => {
-            use(ui);
-            try {
-              const text = await adapters.review(name, checkout);
-              await save(name, text);
-              reviews[name] = text;
-              return detail(`${words(text)} words`, name);
-            } catch (error) {
-              failures.push(`${name}: ${error.message ?? error}`);
-              throw error;
-            }
-          },
-        })),
-      },
-      {
-        title: 'Verify', section: true,
-        run: async (ui) => {
-          use(ui);
-          verified = await adapters.verify(Object.fromEntries(REVIEWERS.map((name) => [name, reviews[name]])));
-          await save('verified', verified.markdown);
-        },
-      },
-      {
-        title: 'Digest',
-        steps: [{
-          title: 'writing digest',
-          run: async (ui) => {
-            use(ui);
-            digest = await adapters.digest(verified.markdown, verified.findings);
-            await save('digest', digest);
-            return detail(`${words(digest.split(/<details\b/i)[0])} visible words`, 'review-digest');
-          },
-        }],
-      },
-    ], options);
+    }], options);
+    await runSteps(plan.mode === 'follow-up' ? followUpSteps() : fullSteps(), options);
   } catch (error) {
     reviewError = failures.length ? new Error(failures.join('\n'), { cause: error }) : error;
   } finally {
@@ -172,17 +241,20 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
     pr, directory, saved, digest, digestPath: saved.at(-1), head: checkout.head,
     title: checkout.title, model: checkout.model, checkModel: checkout.checkModel,
     findings: verified.findings, usage: adapters.usage?.() ?? [],
+    followUp: plan.mode === 'follow-up' ? { old: plan.old } : null,
   };
 }
 
 export async function main(args, options = {}) {
   // The interactive watch returns to its picker after each review.
-  if (args[0] === 'watch') return watchCommand(args.slice(1), { review: (url) => reviewOne(url, { ...options, interactive: true }), ...options });
+  if (args[0] === 'watch') return watchCommand(args.slice(1), { review: (url, choice = {}) => reviewOne(url, { ...options, interactive: true, full: Boolean(choice.full) }), ...options });
   const flags = args.filter((arg) => arg.startsWith('-'));
   const urls = args.filter((arg) => !arg.startsWith('-'));
-  const unknown = flags.filter((flag) => !['-y', '--yes'].includes(flag));
-  if (urls.length > 1 || unknown.length) throw new Error('Usage: reviewpr [--yes] [<GitHub PR URL>]\n       reviewpr watch [--once | --install | --uninstall]');
-  const interactive = options.interactive ?? Boolean(!flags.length && process.stdin.isTTY && process.stderr.isTTY);
+  const unknown = flags.filter((flag) => !['-y', '--yes', '--full'].includes(flag));
+  if (urls.length > 1 || unknown.length) throw new Error('Usage: reviewpr [--yes] [--full] [<GitHub PR URL>]\n       reviewpr watch [--once | --install | --uninstall]');
+  const yes = flags.some((flag) => flag === '-y' || flag === '--yes');
+  let full = flags.includes('--full');
+  const interactive = options.interactive ?? Boolean(!yes && process.stdin.isTTY && process.stderr.isTTY);
   let url = urls[0];
   if (url) parsePrUrl(url);
   else {
@@ -190,10 +262,12 @@ export async function main(args, options = {}) {
     if (!interactive) throw new Error('Pass a PR URL, or run in a terminal without --yes to pick one from defaultRepository.');
     const config = await readConfig(options.configPath);
     if (!config.defaultRepository) throw new Error('Pass a PR URL, or set "defaultRepository": "owner/repo" in config.json to pick from its open PRs.');
-    url = await (options.pick ?? choosePr)(config.defaultRepository, createAdapters({ ...options, progress: () => {} }));
+    url = await (options.pick ?? choosePr)(config.defaultRepository, createAdapters({ ...options, progress: () => {} }), {
+      onPick: (choice) => { full = full || Boolean(choice?.full); },
+    });
     if (!url) return;
   }
-  return reviewOne(url, { ...options, interactive });
+  return reviewOne(url, { ...options, interactive, full });
 }
 
 // One review of one PR: run the pipeline, show the summary, then offer to
@@ -214,6 +288,7 @@ export async function reviewOne(url, options = {}) {
     progress: reporter,
     live,
     router,
+    full: Boolean(options.full),
   });
   // In the interactive screen the cost table sits above the first question instead.
   printSummary(result, process.stderr, { cost: !(interactive || options.publish) });

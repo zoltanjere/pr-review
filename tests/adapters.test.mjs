@@ -49,12 +49,15 @@ const isCheck = (args) => promptOf(args).startsWith('Verify code-review findings
 
 // Real git against the fixture (fetches redirected to the local repo), faked
 // gh and az, and `copilot(args, options)` for agent calls.
-function mockExecute(f, { metadata = {}, copilot, az, issue, reference } = {}) {
+function mockExecute(f, { metadata = {}, copilot, az, issue, reference, reviews, compare } = {}) {
   return async (command, args, options) => {
     if (command === 'az') return az(args);
     if (command === 'gh') {
       if (args[0] === 'issue') return issue(args);
       if (args[0] === 'api' && /\/issues\/\d+$/.test(args[1])) return reference ? reference(args) : JSON.stringify({ state: 'open' });
+      if (args[0] === 'api' && args[1] === 'user') return 'me\n';
+      if (args[0] === 'api' && args.includes('--paginate')) return reviews ? reviews(args) : '[[]]';
+      if (args[0] === 'api' && args[1].includes('/compare/')) return `${compare ?? 'ahead'}\n`;
       return JSON.stringify({ baseRefOid: f.base, headRefOid: f.head, title: '', body: '', closingIssuesReferences: [], ...metadata });
     }
     if (command === 'copilot') return copilot(args, options);
@@ -225,6 +228,74 @@ test('the entry point produces five saved review stages for a local repository',
   assert.match(id, /^\d{4}$/);
   assert.deepEqual(files.sort(), ['code-review', 'digest', 'ponytail-review', 'verified'].map((stage) => `${id}-${stage}.md`));
   assert.match(await readFile(join(output, day, 'widget-PR42', `${id}-verified.md`), 'utf8'), /^# Verified review/);
+});
+
+// A PR you reviewed at f.head (Request changes), with one fix commit pushed since.
+async function reviewedFixture(t) {
+  const f = await fixture(t);
+  await writeFile(join(f.repo, 'example.txt'), 'fixed\n');
+  f.git('commit', '-qam', 'fix: handle the empty case');
+  const fixedHead = f.git('rev-parse', 'HEAD');
+  f.git('update-ref', 'refs/pull/42/head', fixedHead);
+  const posted = `**Verdict:** 🔴 Fix before merge. 1 must-fix.\n\n### Must fix\n1. 🔴 **Empty input crashes**\n   \`example.txt:1\`\n   An empty file throws. Fix: handle it.\n\n---\n<sub>Reviewed at \`${f.head.slice(0, 7)}\` with AI assistance. Each finding was checked against the code.</sub>\n`;
+  const reviews = (args) => {
+    const path = args.at(-1);
+    if (path.endsWith('/reviews')) return JSON.stringify([[{ user: { login: 'me' }, state: 'CHANGES_REQUESTED', body: posted, commit_id: f.head, submitted_at: '2026-01-01T00:00:00Z' }]]);
+    if (path.includes('/issues/')) return JSON.stringify([[{ user: { login: 'alice', type: 'User' }, created_at: '2026-01-02T00:00:00Z', body: 'Handled the empty case.' }, { user: { login: 'ci[bot]', type: 'Bot' }, created_at: '2026-01-02T00:00:00Z', body: 'green' }]]);
+    return '[[]]';
+  };
+  return { ...f, old: f.head, head: fixedHead, reviews, metadata: { headRefOid: fixedHead, author: { login: 'alice' }, baseRefName: 'main' } };
+}
+
+test('a PR re-reviewed after fixes gets a follow-up: earlier findings checked, new commits scanned, no full reviewers', async (t) => {
+  const f = await reviewedFixture(t);
+  const output = join(f.root, 'reviews');
+  const prompts = [];
+  const copilot = (args) => {
+    const prompt = promptOf(args);
+    prompts.push(prompt);
+    const model = args[args.indexOf('--model') + 1];
+    if (prompt.startsWith('This is a follow-up review')) {
+      return jsonl([message(JSON.stringify([{ n: 1, status: 'Fixed', answer: '-', reply: '', evidence: 'example.txt:1 now handles it.', remaining: '' }]), model)]);
+    }
+    if (prompt.startsWith('Review only the new commits')) return jsonl([message('No findings.', model)]);
+    return goodAgent(args);
+  };
+  const { main } = await import('../src/review.mjs');
+  await main(['https://github.com/acme/widget/pull/42'], {
+    projectsRoot: f.root, configPath: f.config, outputRoot: output, progress: () => {},
+    execute: mockExecute(f, { copilot, reviews: f.reviews, metadata: f.metadata }),
+  });
+  const [day] = await readdir(output);
+  const dir = join(output, day, 'widget-PR42');
+  const files = (await readdir(dir)).map((file) => file.replace(/^\d{4}-/, '')).sort();
+  assert.deepEqual(files, ['digest.md', 'follow-up.md', 'scan.md', 'verified.md']);
+  assert(!prompts.some((prompt) => /^\/(ponytail-review|code-review)/.test(prompt)));
+  // The check sees the new-code diff and the human replies, not the bot's.
+  const check = prompts.find((prompt) => prompt.startsWith('This is a follow-up review'));
+  const diffPath = /changes since the earlier review are in (\S+) /.exec(check)[1];
+  assert.equal(diffPath.endsWith('new-diff.txt'), true);
+  const digest = await readFile(join(dir, (await readdir(dir)).find((file) => file.endsWith('-digest.md'))), 'utf8');
+  assert.match(digest, /^\*\*Verdict:\*\* ✅ Ship\. The earlier point is resolved, nothing new\./);
+  assert.match(digest, new RegExp(`Re-review of the changes since the review at \`${f.old.slice(0, 7)}\`\\*\\* \\(1 new commit`));
+  assert.match(digest, /✅ \*\*Fixed:\*\* Empty input crashes/);
+});
+
+test('a rewritten history falls back to a full review and tells the author why', async (t) => {
+  const f = await reviewedFixture(t);
+  const output = join(f.root, 'reviews');
+  const notes = [];
+  const { main } = await import('../src/review.mjs');
+  await main(['https://github.com/acme/widget/pull/42'], {
+    projectsRoot: f.root, configPath: f.config, outputRoot: output, progress: (text) => notes.push(String(text)),
+    execute: mockExecute(f, { copilot: goodAgent, reviews: f.reviews, metadata: f.metadata, compare: 'diverged' }),
+  });
+  const [day] = await readdir(output);
+  const dir = join(output, day, 'widget-PR42');
+  const files = (await readdir(dir)).map((file) => file.replace(/^\d{4}-/, '')).sort();
+  assert.deepEqual(files, ['code-review.md', 'digest.md', 'ponytail-review.md', 'verified.md']);
+  const digest = await readFile(join(dir, (await readdir(dir)).find((file) => file.endsWith('-digest.md'))), 'utf8');
+  assert.match(digest, /^\*\*Verdict:\*\*[^\n]*\n\n> 🔁 \*\*Full re-review:\*\* the commit reviewed last time/);
 });
 
 for (const [name, events, pattern] of [

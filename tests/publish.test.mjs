@@ -43,6 +43,10 @@ test('own PRs and PRs with newer commits can only get a comment; closed PRs get 
 test('the posted body is the digest plus a short footer naming the reviewed commit', () => {
   const body = reviewBody('**Verdict:** ✅ Ship.\n', HEAD);
   assert.match(body, /^\*\*Verdict:\*\* ✅ Ship\.\n\n---\n<sub>Reviewed at `aaaaaaa` with AI assistance\. Each finding was checked against the code\.<\/sub>\n$/);
+
+  // A follow-up names the review it followed; the picker reads the new commit back.
+  const followUp = reviewBody('**Verdict:** ✅ Ship.\n', HEAD, 'b'.repeat(40));
+  assert.match(followUp, /<sub>Follow-up at `aaaaaaa` of the review at `bbbbbbb`, with AI assistance\. Each finding was checked against the code\.<\/sub>\n$/);
 });
 
 // Answers for the arrow-key menus: a 0-based index, 'default' for Enter on the

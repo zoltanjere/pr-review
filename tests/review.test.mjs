@@ -312,3 +312,50 @@ test('the CLI also starts when run through a symlink, from another folder', asyn
   assert.equal(run.status, 1);
   assert.match(run.stderr, /Pass a PR URL, or run in a terminal/);
 });
+
+test('a follow-up with no new commits checks the replies only: no scan, no verify, no reviewers', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pr-review-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { runPipeline } = await import('../src/review.mjs');
+  const calls = [];
+  const finding = { n: 1, severity: 'Should fix', title: 'Backoff has no upper bound', location: '`retry.ts`', text: 'Fix: clamp it.' };
+  const adapters = {
+    prepare: async () => ({ checkout: 'fixture', head: 'b'.repeat(40), cleanup: async () => {} }),
+    followUpPlan: async (options) => {
+      calls.push(['plan', options]);
+      return { mode: 'follow-up', old: 'a'.repeat(40), head: 'b'.repeat(40), commits: 0, newDiffText: '', findings: [finding], chained: false, merged: null };
+    },
+    followUp: async () => { calls.push(['followUp']); return [{ status: 'Answered', answer: 'accepted', reply: 'Bounded by the caller.', evidence: 'caller.ts:3 caps it.' }]; },
+    scan: async () => { calls.push(['scan']); return ''; },
+    review: async () => { calls.push(['review']); return ''; },
+    verify: async () => { calls.push(['verify']); return { markdown: '', findings: [] }; },
+    digest: async () => { calls.push(['digest']); return ''; },
+    linkify: async (text) => text,
+  };
+  const notes = [];
+  const result = await runPipeline('https://github.com/acme/widget/pull/42', { root, adapters, now: NOW, progress: (text) => notes.push(String(text)) });
+  assert.deepEqual(calls, [['plan', { full: false }], ['followUp']]);
+  assert.match(result.digest, /^\*\*Verdict:\*\* ✅ Ship\. The earlier point is resolved\./);
+  assert.match(result.digest, /only checks the replies to the 1 point raised last time; there are no new commits/);
+  assert.deepEqual(result.followUp, { old: 'a'.repeat(40) });
+  assert(notes.some((note) => note.includes('Follow-up of your review at `aaaaaaa`: no new commits, 1 finding to check.')));
+});
+
+test('--full reaches the plan, and a full review says why before the reviewers start', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'pr-review-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { runPipeline } = await import('../src/review.mjs');
+  const order = [];
+  const adapters = {
+    prepare: async () => ({ checkout: 'fixture', cleanup: async () => {} }),
+    followUpPlan: async (options) => ({ mode: 'full', line: options.full ? 'Full review: you asked for one.' : null, notice: null }),
+    review: async (name) => { order.push(name); return `${name} finding`; },
+    verify: async () => ({ markdown: 'verified', findings: [] }),
+    digest: async () => '**Verdict:** ✅ Ship. No issues found.',
+  };
+  const result = await runPipeline('https://github.com/acme/widget/pull/42', { root, adapters, now: NOW, full: true, progress: (text) => order.push(String(text)) });
+  const said = order.findIndex((line) => line.includes('Full review: you asked for one.'));
+  assert(said >= 0 && said < order.indexOf('ponytail-review'));
+  assert.equal(result.followUp, null);
+  assert.equal(result.digest, '**Verdict:** ✅ Ship. No issues found.');
+});

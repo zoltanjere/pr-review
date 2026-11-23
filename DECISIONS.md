@@ -385,6 +385,22 @@ Each entry has three parts:
   - **Request changes blocks the author** until you look again. Approving doesn't, which is why `fixes-after-changes` exists on its own next to `reviewed-updated`.
 - **Don't:** Send PR titles to a third-party push service. They are the reviewed repository's data.
 
+### 7.5 Follow-up review after fixes
+- **Decision:** reviewing a PR again after your Request changes or Comment runs a follow-up instead of a full review, when it can (`src/follow-up.mjs`).
+  - **Source:** your latest posted review on GitHub (REST, which gives the full commit and the time): its numbered findings and the commit in its footer. Reviews you didn't post, and minor items inside `<details>`, aren't read.
+  - **Decided in code before any model runs,** first match wins: `--full` or `f`; your own PR; no review yet; your last review was an approval; a review without the reviewpr footer; a review without numbered findings; a reviewed commit that is no longer an ancestor of the head (GitHub's compare status `diverged`/`behind`, confirmed with `git merge-base --is-ancestor`); a reviewed commit GitHub no longer has. Each fallback has one reason, said in the terminal before the run, on the picker row (from the compare call the row already makes) and to the author under the verdict.
+  - **Steps:** one check session (the check model) gives each earlier finding Fixed, Partly fixed, Answered (accepted or disputed) or Still open, from the new-code diff, the current files and the replies since the review. One scan session reviews only the new code, told the earlier findings so it doesn't repeat them; verify checks its findings as usual. The scan is skipped without new code.
+  - **New code:** `git diff <reviewed> <head>` limited to the files the PR changes, so a merge from the base branch isn't reviewed as the PR's work; the notice says when one happened.
+  - **Digest:** written in code (the verdict, the re-review notice, still open, resolved); the review-digest skill writes only the new findings, renumbered after the still-open ones. Still open and new findings stay numbered, and the footer reads `Follow-up at <head> of the review at <old>`, so the next follow-up reads it the same way.
+  - **Verdict:** open earlier findings keep their severity; a disputed answer and a partial fix count as open; new findings count as in a full review. All resolved and nothing new above Minor approves.
+- **Why:**
+  - **The question after fixes is narrower:** were the points fixed or answered, and did the fixes break anything. A full review answers a different one, and its fresh sample of findings on unchanged code is unfair to an author who did what was asked.
+  - **Replies matter:** a full review doesn't read them and raises answered points again.
+  - **The posted review is what the author saw.** The digest may have been edited before posting, and local runs don't record their commit.
+  - **The notice is a template, not model text,** so its scope and counts always match what ran.
+  - **Cost:** two sessions plus a small verify, against two reviewer sessions plus verify.
+- **Don't:** Follow up across a rebase by matching moved code (range-diff). It's much harder to get right; the clear fallback covers it.
+
 ## 8. Evaluation
 
 ### 8.1 How changes are judged

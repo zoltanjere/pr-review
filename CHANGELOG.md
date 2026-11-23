@@ -2,8 +2,11 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
-## Unreleased
+## 0.10.0 (2026-11-23)
 
+- **Follow-up reviews:** reviewing a PR again after your Request changes or Comment checks each earlier finding (fixed, partly fixed, answered, still open) and scans only the new commits, instead of a full review. Replies are read and judged against the code. The comment opens with a re-review notice telling the author what was and wasn't reviewed, and the footer names the review it followed, so follow-ups chain.
+- **Clear fallbacks:** after a rebase or force-push, an approval, a hand-written review or one without findings, it runs a full review and says why: in the terminal before any model runs, on the picker's Fixes pushed row, and to the author under the verdict.
+- **`--full` and `f`:** force a full review from the command line or the picker.
 - **Watch notifications read like a picker row:** the title is what happened (`⟳ #61 fixes pushed`), then the PR title, then who and how much (`by octo-dev · 2 new commits · acme/widget`). Merges name who merged and who opened the PR.
 - **Watch notifications survive a blocked terminal-notifier:** when macOS refuses terminal-notifier, watch shows a plain osascript notification ending with "run reviewpr" instead of dropping it, and logs that it used the fallback.
 - **`watch --install` tests notifications:** it sends a test notification and reports the mode: clickable, plain, or not working.

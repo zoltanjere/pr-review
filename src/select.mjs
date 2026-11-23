@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { palette, plainReporter, short } from './ui.mjs';
 import { isLive, runSteps } from './steps.mjs';
 import { isSkipped, loadState, saveState, skipKey } from './picker-state.mjs';
+import { ancestry, followUpMode } from './follow-up.mjs';
 
 // Which open PRs still need your review, what state each is in, and an
 // arrow-key picker for them. Listing uses read-only gh calls only; no model is
@@ -17,7 +18,7 @@ const STALE_DAYS = 14;
 // The commit a posted review covered, read from our footer: "Reviewed at
 // `a7e50c8`…", or "…by pr-review at `c0ffee1`…" in older posts.
 export function reviewedHead(review) {
-  return /(?:Reviewed|pr-review) at `([0-9a-f]{7,40})`/.exec(review?.body ?? '')?.[1] ?? null;
+  return /(?:Reviewed|pr-review|Follow-up) at `([0-9a-f]{7,40})`/.exec(review?.body ?? '')?.[1] ?? null;
 }
 
 export const isBot = (author) => Boolean(author?.is_bot) || /\[bot\]$/.test(author?.login ?? '');
@@ -97,7 +98,11 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
     // `review` and `commits` tell watch which review type the pushes came after.
     const pushed = { review: mine.state, commits: newer?.count ?? null };
     if (mine.state === 'APPROVED') return { ...at('approved', newer?.last ?? pr.updatedAt), ...pushed, label: `approved · ${what}` };
-    return { ...at('fixes', newer?.last ?? pr.updatedAt), ...pushed, label: what };
+    // When Enter can't run a follow-up (history rewritten, a hand-written
+    // review…), say so before it's pressed.
+    const mode = followUpMode({ latest: { state: mine.state, body: mine.body, commit: covered }, history: ancestry(newer?.status) });
+    const fallback = mode.mode === 'full' && mode.short ? ` · full review: ${mode.short}` : '';
+    return { ...at('fixes', newer?.last ?? pr.updatedAt), ...pushed, followUp: mode.mode === 'follow-up', label: `${what}${fallback}` };
   }
   // The age is its own column (formatRows), so labels only add what the
   // group heading doesn't already say.
@@ -258,6 +263,8 @@ export function pickFromList(title, rows, { input = process.stdin, output = proc
       else if (text && actions[text]) {
         const update = actions[text](index);
         if (!update) return undefined;
+        // An action may pick the row, like Enter (f: full review).
+        if (update.choose) return selectable(index) ? finish(index) : undefined;
         apply(update);
       } else return undefined;
       draw();
@@ -319,12 +326,14 @@ export async function scanRepo(repo, adapters, { now = Date.now(), seenAt = null
 // one. The loading is a visible step ("Loading open PRs of owner/repo" with
 // what it is doing right now), so the terminal never sits silent. `s` skips
 // the highlighted PR until its head changes, `a` shows skipped PRs. Returns
-// the PR URL, or null when nothing was picked.
+// the PR URL, or null when nothing was picked. `f` picks the row for a full
+// review instead of a follow-up: onPick({ full }) says which.
 // With `watch` (the interactive watch app), the list stays open while empty,
 // refreshes in place, marks new PRs with • until the cursor reaches them, and
 // shows a status line: watch = { scanner(status, { now, seenAt }), subscribe(apply)
 // returning an unsubscribe, refresh(), status(), marks: Set of PR numbers }.
-export async function choosePr(repo, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now(), watch = null } = {}) {
+export async function choosePr(repo, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now(), watch = null, onPick } = {}) {
+  let full = false;
   const [owner, name] = repo.split('/');
   // Read the last look before listing: New and Updated mean "since then".
   const state = loadState(statePath);
@@ -386,6 +395,8 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
       showSkipped = !showSkipped;
       return build(view.map[index]);
     },
+    // Enter decides follow-up or full review itself; f always runs a full one.
+    f: (index) => (view.map[index] ? (full = true, { choose: true }) : undefined),
     ...(watch ? { r: () => { watch.refresh(); return undefined; } } : {}),
   };
   const control = {};
@@ -401,11 +412,12 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
   const first = build(null);
   const picked = await pickFromList(first.title, first.rows, {
     input, output, initial: first.index, actions, control, onMove: watch ? onMove : undefined, status: watch?.status,
-    hint: `Enter review · s skip until it changes · a show skipped${watch ? ' · r refresh' : ''} · q ${watch ? 'quit' : 'cancel'}`,
+    hint: `Enter review · f full review · s skip until it changes · a show skipped${watch ? ' · r refresh' : ''} · q ${watch ? 'quit' : 'cancel'}`,
   }).finally(() => unsubscribe?.());
   if (picked === null || !view.map[picked]) {
     output.write(watch ? 'Watch stopped.\n' : 'Nothing selected.\n');
     return null;
   }
+  onPick?.({ full });
   return `https://github.com/${repo}/pull/${view.map[picked].number}`;
 }

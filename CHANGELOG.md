@@ -2,6 +2,10 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.12.0 (2026-11-24)
+
+- **An open question isn't an approval:** with a Question open and no Must or Should fix, the verdict is 💬 Not approved yet and posting preselects Comment only, in full and follow-up reviews. Before, it said ✅ Ship and preselected Approve. Choosing Approve still works and posts "✅ Ship. 2 questions, none blocking."; Request changes posts ⚠️ Changes recommended.
+
 ## 0.11.3 (2026-11-24)
 
 - **Reviews never ping anyone:** an `@user` or `@org/team` a model writes into a digest is put in backticks before it's saved, so posting it notifies nobody. Code, email addresses and links are left as they are.

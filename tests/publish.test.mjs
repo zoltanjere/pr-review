@@ -11,14 +11,14 @@ const open = (extra = {}) => ({ state: 'OPEN', head: HEAD, author: 'alice', view
 const mustFix = [{ title: 'Crash', status: 'Confirmed', priority: 'Must fix' }];
 const minorOnly = [{ title: 'Typo', status: 'Confirmed', priority: 'Minor' }];
 
-test('approve is recommended only without a must-fix or should-fix', () => {
+test('approve is recommended only without a must-fix, should-fix or open question', () => {
   assert.deepEqual(reviewOptions({ findings: minorOnly, reviewedHead: HEAD, status: open() }),
     { allowed: ['approve', 'comment', 'request-changes'], recommended: 'approve', notes: [], level: 'ship' });
   assert.equal(reviewOptions({ findings: mustFix, reviewedHead: HEAD, status: open() }).recommended, 'request-changes');
   const shouldFix = [{ title: 'Gap', status: 'Confirmed', priority: 'Should fix' }];
   assert.equal(reviewOptions({ findings: shouldFix, reviewedHead: HEAD, status: open() }).recommended, 'comment');
   const questions = [{ title: 'Why?', status: 'Question', priority: '-' }];
-  assert.equal(reviewOptions({ findings: questions, reviewedHead: HEAD, status: open() }).recommended, 'approve');
+  assert.equal(reviewOptions({ findings: questions, reviewedHead: HEAD, status: open() }).recommended, 'comment');
 });
 
 test('an edited verdict line decides the recommendation', () => {

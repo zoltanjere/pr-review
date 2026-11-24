@@ -58,7 +58,7 @@ reviewpr watch --install                          # get notified in the backgrou
 
 **When you review a PR:**
 - **Duration:** it takes a few minutes, and each step shows a spinner, a timer and the live cost. A run uses about 5 Copilot sessions.
-- **At the end** you see the verdict (🔴 Fix before merge, ⚠️ Changes recommended or ✅ Ship), the findings and what verify dropped and why.
+- **At the end** you see the verdict (🔴 Fix before merge, ⚠️ Changes recommended, 💬 Not approved yet or ✅ Ship), the findings and what verify dropped and why.
 - **Your choice:** keep it local (the default), post it as a review, or edit it first. Posting asks you twice, and nothing is ever posted without a terminal.
 - **Your checkouts:** it reviews in a throwaway clone, so your own clones are never touched.
 - **After fixes:** reviewing a PR you requested changes on or commented on again runs a quicker **follow-up review**: it checks only your earlier points and the new commits, and tells the author so. See [Follow-up reviews](#follow-up-reviews).
@@ -229,7 +229,7 @@ digest  ── verdict line + at most 5 findings, minor items folded
 ```
 
 - **Verify** is the only step that sets priority: *Must fix*, *Should fix* or *Minor*. Every rejected finding is kept with its reason.
-- **The verdict line** is set in code from those priorities, so it can't contradict the findings: 🔴 Fix before merge, ⚠️ Changes recommended, or ✅ Ship.
+- **The verdict line** is set in code from those priorities, so it can't contradict the findings: 🔴 Fix before merge, ⚠️ Changes recommended, 💬 Not approved yet (open questions only), or ✅ Ship.
 - **`path:line` references** in the comment become GitHub links. They open the line in *Files changed* when it's part of the diff, and otherwise the file at the reviewed commit.
 
 While it runs, each step shows a spinner, a timer, and its live tokens and AI credits:
@@ -248,7 +248,7 @@ What next?
   Edit the digest first
 ```
 
-- **Posting** asks for the review type, with the one matching the verdict preselected: Request changes for 🔴, Comment only for ⚠️, Approve for ✅.
+- **Posting** asks for the review type, with the one matching the verdict preselected: Request changes for 🔴, Comment only for ⚠️ and 💬, Approve for ✅.
 - **Overriding:** if you pick a type that contradicts the verdict, the verdict line is rewritten to match.
 - **New commits or your own PR:** only Comment is offered.
 - **How it posts:** one `gh pr review` as you, with a footer naming the reviewed commit.
@@ -287,7 +287,7 @@ digest  ── verdict, a re-review notice for the author, still open, new, reso
   </details>
   ```
 - **Short by design:** resolved points are one line each (✅ fixed, 💬 answered), with no explanation. Only open points carry a reason. The full evidence for every point is in the saved `…-follow-up.md`.
-- **Verdict:** 🔴 when a Must fix is still open, disputed or new; ⚠️ when only Should fix items or questions are open; ✅ when everything is resolved and nothing new came up.
+- **Verdict:** 🔴 when a Must fix is still open, disputed or new; ⚠️ when a Should fix is open or new; 💬 when only questions are open; ✅ when everything is resolved and nothing new came up.
 - **Cost:** two sessions plus a small verify, instead of two full reviewers plus verify.
 - **Chains:** the posted footer reads `Follow-up at def5678 of the review at abc1234`, so the next follow-up checks only what was still open.
 - **When it runs a full review instead,** and says why in the terminal, on the picker row and to the author under the verdict:

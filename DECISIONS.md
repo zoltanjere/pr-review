@@ -223,13 +223,14 @@ Each entry has three parts:
   |---|---|---|
   | any Must fix | 🔴 Fix before merge | Request changes |
   | any Should fix | ⚠️ Changes recommended | Comment only |
-  | only Questions, Minor or none | ✅ Ship | Approve |
+  | any Question (no Must or Should fix) | 💬 Not approved yet | Comment only |
+  | only Minor or none | ✅ Ship | Approve |
 
   The counts on the line ("4 should-fix, 1 question.") are computed in code too. Minor items are counted only in the `<details>` summary, so the two numbers can't disagree when the digest merges related minor lines; with only minor items the line says "Only minor items." The `<details>` summary is counted in code too: every Minor, plus the Should fix items and Questions that didn't fit the five visible slots (verify's count minus the numbered 🟡 and ❓ entries shown), for example "1 question and 5 minor items". A run once said "2 questions" in the verdict but showed one, because the model's summary counted the folded question as a minor item. When the person approves over open should-fix items or questions, the line becomes "✅ Ship. 1 should-fix, 1 question, none blocking." so the posted comment matches the decision without an edit.
 - **Why:**
   - An earlier rule, "✅ Ship unless there is a Must fix", produced "✅ Ship" above four Should fix items and recommended Approve. The person had to override it by hand.
   - With the line written by the model there were two sources of truth; now there is one.
-  - Open questions don't block an approval (user decision).
+  - An open Question waits for an answer, so it recommends Comment only, not Approve (user decision, 2026-11-24). Earlier, questions didn't affect the verdict: a follow-up whose two open points both asked whether the owners accepted removing a protection said "✅ Ship. 2 still open." and preselected Approve, which would have undercut its own questions. Approving stays one choice away, and the line then reads "✅ Ship. 2 questions, none blocking."
   - Should fix doesn't block a merge, so ⚠️ recommends Comment only. A Haiku run once gave Should fix to a test nit and recommended Request changes on a correct PR. A priority one level too high should cost a comment, not a blocked PR (user decision).
 - **Don't:**
   - Let the skill write the verdict again.
@@ -238,7 +239,7 @@ Each entry has three parts:
 ### 5.2a The person's choice wins
 - **Decision:** The recommendation follows the digest's current verdict line, so an edited line changes it. When the person picks a review type that contradicts the verdict line, the line is rewritten before posting and the saved digest is updated:
   - Approve gives ✅ Ship;
-  - Request changes on ✅ gives ⚠️ Changes recommended;
+  - Request changes on ✅ or 💬 gives ⚠️ Changes recommended;
   - Comment only on ✅ gives 💬 Not approved yet.
 - **Why:** The posted comment must never say "Ship" on a review that requests changes, or the reverse.
 

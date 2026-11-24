@@ -4,7 +4,7 @@ import { alignVerdict, verdictFor, verdictFromText, withVerdict } from '../src/v
 
 const f = (status, priority = '-') => ({ title: 't', status, priority });
 
-test('the verdict has three levels decided by the highest confirmed priority', () => {
+test('the verdict is decided by the highest confirmed priority, and an open question is not an approval', () => {
   assert.equal(verdictFor([f('Confirmed', 'Must fix'), f('Confirmed', 'Should fix')]).line, '**Verdict:** 🔴 Fix before merge. 1 must-fix, 1 should-fix.');
   const four = [1, 2, 3, 4].map(() => f('Confirmed', 'Should fix'));
   assert.deepEqual(
@@ -12,10 +12,19 @@ test('the verdict has three levels decided by the highest confirmed priority', (
     ['**Verdict:** ⚠️ Changes recommended. 4 should-fix, 1 question.', 'comment'],
   );
   assert.deepEqual([verdictFor([f('Question'), f('Question')]).line, verdictFor([f('Question')]).event],
-    ['**Verdict:** ✅ Ship. 2 questions.', 'approve']);
+    ['**Verdict:** 💬 Not approved yet. 2 questions.', 'comment']);
+  assert.equal(verdictFor([f('Question'), f('Confirmed', 'Minor')]).level, 'comment');
   assert.equal(verdictFor([]).line, '**Verdict:** ✅ Ship. No issues found.');
   // Minors are counted in the <details> summary only, never in the verdict line.
   assert.equal(verdictFor([f('Confirmed', 'Minor'), f('Confirmed', 'Minor')]).line, '**Verdict:** ✅ Ship. Only minor items.');
+});
+
+test('a question verdict becomes Ship when approved, and Changes recommended when changes are requested', () => {
+  const asks = '**Verdict:** 💬 Not approved yet. 2 questions.\n\nbody';
+  assert.equal(alignVerdict(asks, 'approve').digest, '**Verdict:** ✅ Ship. 2 questions, none blocking.\n\nbody');
+  assert.equal(alignVerdict(asks, 'request-changes').digest, '**Verdict:** ⚠️ Changes recommended. 2 questions.\n\nbody');
+  assert.equal(alignVerdict(asks, 'comment').changed, false);
+  assert.equal(alignVerdict('**Verdict:** 💬 Not approved yet. 2 still open.\n\nbody', 'approve').line, '**Verdict:** ✅ Ship. 2 still open, none blocking.');
 });
 
 test('the verdict level is read back from a digest, or null without a verdict line', () => {

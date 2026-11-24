@@ -51,7 +51,8 @@ export function describeEvent(type, data, c) {
     return [`${c[color](icon)} ${tag} ${short(data.title, 70)}${reason}`];
   }
   if (type === 'model') {
-    return [`Model: ${c.bold(data.model)}${data.checkModel && data.checkModel !== data.model ? ` · check: ${c.bold(data.checkModel)}` : ''}`];
+    const provider = data.provider ? `Provider: ${c.bold(PROVIDER_NAMES[data.provider] ?? data.provider)} · ` : '';
+    return [`${provider}Model: ${c.bold(data.model)}${data.checkModel && data.checkModel !== data.model ? ` · check: ${c.bold(data.checkModel)}` : ''}`];
   }
   if (type === 'review') {
     return [`${data.name}: ${data.words} words`];
@@ -87,6 +88,9 @@ export function formatTokens(tokens) {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M tokens`;
   return `${Math.max(1, Math.round(tokens / 1000))}k tokens`;
 }
+
+// The names the terminal shows for config.json's "provider".
+export const PROVIDER_NAMES = { copilot: 'Copilot', claude: 'Claude Code' };
 
 // "412k tokens · 3.10 AI credits" for a running or finished stage.
 export function formatUsage({ tokens, credits } = {}) {

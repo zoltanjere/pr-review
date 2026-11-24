@@ -94,13 +94,17 @@ export function followUpMode({ full = false, own = false, latest = null, history
   const fallback = (key, line, short, notice) => ({ mode: 'full', key, line: `Full review: ${line}`, short, notice });
   if (full) return fallback('asked', 'you asked for one.', 'full review', null);
   if (own || !latest) return { mode: 'full', key: own ? 'own' : 'first', line: null, short: null, notice: null };
-  if (reviewState(latest) === 'APPROVED') return { mode: 'full', key: 'approved', line: 'Full review: your last review was an approval.', short: null, notice: null };
+  // After your approval only the new commits are reviewed, plus any numbered
+  // points the approval left open (questions, should-fix items approved over).
+  // Without such points, or for an approval you wrote by hand, that's the
+  // scan of the new commits alone.
+  const approved = reviewState(latest) === 'APPROVED';
   const parsed = postedFindings(latest.body);
   const head = latest.commit ?? postedHead(latest.body);
-  if (!parsed.fromReviewpr) {
+  if (!parsed.fromReviewpr && !approved) {
     return fallback('hand-written', 'your last review wasn\'t made by reviewpr, so its findings can\'t be read.', 'hand-written review', null);
   }
-  if (!parsed.findings.length) {
+  if (!parsed.findings.length && !approved) {
     return fallback('no-findings', 'your last review had no findings to follow up.', 'no findings', null);
   }
   if (history === 'rewritten') {
@@ -111,13 +115,14 @@ export function followUpMode({ full = false, own = false, latest = null, history
     return fallback('missing', `the commit you reviewed (${at(head)}) is no longer available on GitHub.`, 'commit gone',
       `🔁 **Full re-review:** the commit reviewed last time (${at(head)}) is no longer available, so the whole PR was reviewed again. Earlier points may come back in different words.`);
   }
-  return { mode: 'follow-up', key: 'follow-up', head, findings: parsed.findings, line: null, short: null, notice: null };
+  return { mode: 'follow-up', key: 'follow-up', head, approved, findings: parsed.fromReviewpr ? parsed.findings : [], line: null, short: null, notice: null };
 }
 
 // The terminal line for a follow-up, before the first model step.
-export function followUpLine({ head, commits, findings, rebased = false }) {
+export function followUpLine({ head, commits, findings, rebased = false, approved = false }) {
   const count = rebased ? 'rebased, no changes to the PR\'s code' : commits ? `${commits} new commit${commits === 1 ? '' : 's'}` : 'no new commits';
-  return `Follow-up of your review at ${at(head)}: ${count}, ${findings} finding${findings === 1 ? '' : 's'} to check.`;
+  const check = findings ? `${findings} finding${findings === 1 ? '' : 's'} to check` : rebased || !commits ? 'nothing new to review' : 'only the new code is reviewed';
+  return `Follow-up of your ${approved ? 'approval' : 'review'} at ${at(head)}: ${count}, ${check}.`;
 }
 
 // --- The follow-up check's answer -------------------------------------------
@@ -164,12 +169,15 @@ function newSection(body, start) {
 // The notice to the PR author, under the verdict: two short lines saying it's
 // a re-review, its scope, and the counts. Written from templates so it always
 // matches what ran.
-export function reReviewNotice({ old, commits, total, chained = false, merged = null, rebased = false, counts }) {
-  const since = `${chained ? 'the follow-up at ' : ''}${at(old)}`;
+export function reReviewNotice({ old, commits, total, chained = false, approved = false, merged = null, rebased = false, counts }) {
+  const since = `${chained ? 'the follow-up at ' : approved ? 'the approval at ' : ''}${at(old)}`;
   const points = `${total} earlier point${total === 1 ? '' : 's'}${chained ? ' still open' : ''}`;
-  const scope = rebased ? `(rebased, no changes to the PR's code): only the replies to the ${points} were checked.`
-    : commits ? `(${plural(commits, 'new commit')}): only the ${points} and what the new ${commits === 1 ? 'commit' : 'commits'} changed were checked.`
-      : `(no new commits): only the replies to the ${points} were checked.`;
+  const changed = `what the new ${commits === 1 ? 'commit' : 'commits'} changed`;
+  // An approval without open points: only the new commits were reviewed.
+  const scope = !total ? (rebased || !commits ? `(${rebased ? 'rebased, no changes to the PR\'s code' : 'no new commits'}): nothing new to check.` : `(${plural(commits, 'new commit')}): only ${changed} was checked.`)
+    : rebased ? `(rebased, no changes to the PR's code): only the replies to the ${points} were checked.`
+      : commits ? `(${plural(commits, 'new commit')}): only the ${points} and ${changed} were checked.`
+        : `(no new commits): only the replies to the ${points} were checked.`;
   const parts = [
     counts.fixed && `${counts.fixed} fixed`,
     counts.answered && `${counts.answered} answered`,
@@ -177,10 +185,12 @@ export function reReviewNotice({ old, commits, total, chained = false, merged = 
     counts.added && `${counts.added} new`,
     commits && !counts.added ? 'nothing new' : null,
   ].filter(Boolean);
+  // With no earlier points and nothing new, the verdict line already says so.
+  const tally = !total && !counts.added ? null : `${parts.join(', ') || 'Nothing to report'}.`;
   return [
     `🔁 **Re-review since ${since}** ${scope}${merged ? ` Changes merged in from \`${merged}\` weren't reviewed.` : ''}`,
-    `${parts.join(', ') || 'Nothing to report'}.`,
-  ].map((line) => `> ${line}`).join('\n');
+    tally,
+  ].filter(Boolean).map((line) => `> ${line}`).join('\n');
 }
 
 // A resolved point needs no explanation: its title, cut at a word, with a
@@ -218,9 +228,11 @@ export function followUpDigest({ previous, statuses, newBody = '', newFindings =
     ...newFindings,
   ];
   const level = verdictFor(all).level;
-  const rest = !open.length && !added.length
+  // Shipping with points open means only questions are left: say they don't block.
+  const rest = !previous.length && !added.length ? 'Nothing new.'
+    : !open.length && !added.length
     ? `${previous.length === 1 ? 'The earlier point is' : `All ${previous.length} earlier points`} resolved${facts.commits ? ', nothing new' : ''}.`
-    : `${[open.length && `${open.length} still open`, added.length && `${added.length} new`].filter(Boolean).join(', ')}.`;
+    : `${[open.length && `${open.length} still open`, added.length && `${added.length} new`].filter(Boolean).join(', ')}${level === 'ship' ? ', none blocking' : ''}.`;
 
   const sections = [verdictLine(level, rest), reReviewNotice({ ...facts, total: previous.length, counts })];
   if (open.length) {
@@ -233,7 +245,7 @@ export function followUpDigest({ previous, statuses, newBody = '', newFindings =
     })].join('\n'));
   }
   const fresh = newSection(newBody, open.length + 1);
-  if (fresh.visible) sections.push(`### New in the fixes\n${fresh.visible}`);
+  if (fresh.visible) sections.push(`### ${facts.approved ? 'New since the approval' : 'New in the fixes'}\n${fresh.visible}`);
   if (done.length) {
     const summary = [counts.fixed && `${counts.fixed} fixed`, counts.answered && `${counts.answered} answered`].filter(Boolean).join(', ');
     sections.push([`<details><summary>Resolved since the last review: ${summary}</summary>`, '',

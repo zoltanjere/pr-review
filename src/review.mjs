@@ -6,7 +6,9 @@ import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { createAdapters, readConfig, REVIEWERS } from './adapters.mjs';
-import { choosePr, pickFromList } from './select.mjs';
+import { choosePr, OPEN_SETTINGS, pickFromList } from './select.mjs';
+import { openSettings, settingsLine } from './settings.mjs';
+import { ring } from './bell.mjs';
 import { palette, plainReporter, toReporter } from './ui.mjs';
 import { createRouter, isLive, runSteps } from './steps.mjs';
 import { costTotal, printSummary } from './confirm.mjs';
@@ -125,7 +127,7 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
   let reviewError;
   // Follow-up or full review, decided while preparing (src/follow-up.mjs).
   let plan = { mode: 'full', line: full ? 'Full review: you asked for one.' : null, notice: null };
-  let statuses;
+  let statuses = [];
   let scanText = '';
   const reviews = {};
   const failures = [];
@@ -172,12 +174,13 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
       }],
     },
   ];
-  // Checks the earlier findings and scans only the new commits.
+  // Checks the earlier findings and scans only the new commits. After an
+  // approval with no open points there is nothing to check, only the scan.
   const followUpSteps = () => [
-    {
+    ...(plan.findings.length || plan.newDiffText?.trim() ? [{
       title: 'Follow-up', concurrent: true,
       steps: [
-        {
+        ...(plan.findings.length ? [{
           title: `checking ${plan.findings.length} earlier finding${plan.findings.length === 1 ? '' : 's'}`,
           run: async (ui) => {
             use(ui);
@@ -185,7 +188,7 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
             await save('follow-up', formatFollowUp(plan.findings, statuses));
             return detail(statusSummary(statuses), 'checking earlier findings');
           },
-        },
+        }] : []),
         ...(plan.newDiffText?.trim() ? [{
           title: 'scanning the new commits',
           run: async (ui) => {
@@ -196,7 +199,7 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
           },
         }] : []),
       ],
-    },
+    }] : []),
     {
       title: 'Verify', section: true,
       run: async (ui) => {
@@ -221,7 +224,7 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
           const newBody = worth ? (await adapters.digest(verified.markdown, verified.findings)).replace(/^\s*\*\*Verdict:\*\*[^\n]*\n*/, '') : '';
           digest = quietMentions(await adapters.linkify(followUpDigest({
             previous: plan.findings, statuses, newBody, newFindings: verified.findings,
-            facts: { old: plan.old, head: plan.head, commits: plan.commits, chained: plan.chained, merged: plan.merged, rebased: plan.rebased },
+            facts: { old: plan.old, head: plan.head, commits: plan.commits, chained: plan.chained, approved: plan.approved, merged: plan.merged, rebased: plan.rebased },
           })));
           await save('digest', digest);
           return detail(visibleWords(digest), worth ? 'review-digest' : undefined);
@@ -238,7 +241,7 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
         reservation = await reserveRun(directory, date);
         if (adapters.followUpPlan) plan = await adapters.followUpPlan({ full });
         // Said before any model runs, so a surprise can still be cancelled.
-        if (plan.mode === 'follow-up') ui.reporter.note(followUpLine({ head: plan.old, commits: plan.commits, findings: plan.findings.length, rebased: plan.rebased }));
+        if (plan.mode === 'follow-up') ui.reporter.note(followUpLine({ head: plan.old, commits: plan.commits, findings: plan.findings.length, rebased: plan.rebased, approved: plan.approved }));
         else if (plan.line) ui.reporter.warn(plan.line);
       },
     }], options);
@@ -251,7 +254,7 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
   await finishRun({ checkout, reservation, error: reviewError, options });
   return {
     pr, directory, saved, digest, digestPath: saved.at(-1), head: checkout.head,
-    title: checkout.title, model: checkout.model, checkModel: checkout.checkModel,
+    title: checkout.title, provider: checkout.provider, model: checkout.model, checkModel: checkout.checkModel,
     findings: verified.findings, usage: adapters.usage?.() ?? [],
     followUp: plan.mode === 'follow-up' ? { old: plan.old } : null,
   };
@@ -309,11 +312,22 @@ export async function runSummary(url, { root, adapters, progress, now = new Date
 
 export async function main(args, options = {}) {
   // The interactive watch returns to its picker after each review or summary.
+  const configPath = options.configPath ?? join(resolve(dirname(fileURLToPath(import.meta.url)), '..'), 'config.json');
+  const settings = {
+    line: async () => settingsLine(JSON.parse(await readFile(configPath, 'utf8'))),
+    open: () => (options.openSettings ?? openSettings)({ configPath }),
+  };
   if (args[0] === 'watch') {
     return watchCommand(args.slice(1), {
       review: (url, choice = {}) => prAction(url, { ...actionOptions({ ...options, interactive: true }), full: Boolean(choice.full), back: true, done: false }),
+      settings,
       ...options,
     });
+  }
+  if (args[0] === 'settings') {
+    if (args.length > 1) throw new Error(USAGE);
+    if (!(options.interactive ?? Boolean(process.stdin.isTTY && process.stderr.isTTY))) throw new Error('Settings need a terminal. Edit config.json instead.');
+    return settings.open();
   }
   const flags = args.filter((arg) => arg.startsWith('-'));
   const urls = args.filter((arg) => !arg.startsWith('-'));
@@ -340,13 +354,18 @@ export async function main(args, options = {}) {
     let full = flags.includes('--full');
     url = await (options.pick ?? choosePr)(config.defaultRepository, createAdapters({ ...options, progress: () => {} }), {
       onPick: (choice) => { full = full || Boolean(choice?.full); },
+      settings: await settings.line(),
     });
+    if (url === OPEN_SETTINGS) {
+      await settings.open();
+      continue;
+    }
     if (!url) return;
     if (await prAction(url, { ...act, full, back: true, start: summary ? 'summary' : 'ask' }) !== 'back') return;
   }
 }
 
-const USAGE = 'Usage: reviewpr [--yes] [--full] [--summary] [<GitHub PR URL>]\n       reviewpr watch [--once | --install | --uninstall]';
+const USAGE = 'Usage: reviewpr [--yes] [--full] [--summary] [<GitHub PR URL>]\n       reviewpr watch [--once | --install | --uninstall]\n       reviewpr settings';
 
 // What reviewing and summarising one PR need, for prAction.
 function actionOptions(options) {
@@ -401,7 +420,11 @@ export async function summaryOne(url, options = {}) {
   const reporter = options.progress ? toReporter(options.progress) : plainReporter();
   const router = live ? createRouter(reporter) : null;
   const adapters = createAdapters({ ...options, progress: router ?? reporter });
-  const result = await runSummary(url, { root: options.outputRoot ?? join(projectRoot, 'reviews'), adapters, progress: reporter, live, router });
+  const started = Date.now();
+  // The bell (src/bell.mjs) when it's done or failed, in a terminal only.
+  const bell = () => options.interactive && (options.ring ?? ring)({ started, configPath: options.configPath });
+  const result = await runSummary(url, { root: options.outputRoot ?? join(projectRoot, 'reviews'), adapters, progress: reporter, live, router })
+    .catch((error) => { bell(); throw error; });
   const output = options.menuOutput ?? process.stderr;
   const c = palette(!process.env.NO_COLOR && output.isTTY);
   const { owner, repo, number } = result.pr;
@@ -410,6 +433,7 @@ export async function summaryOne(url, options = {}) {
   output.write(['', c.dim(`${head}${'─'.repeat(Math.max(4, width - head.length))}`), '', ...renderSummary(result.summary, c), '',
     c.dim([`Saved in ${relative(process.cwd(), result.path)}`, costTotal(result.usage)].filter(Boolean).join(' · ')), c.dim('Nothing was posted to GitHub.'), ''].join('\n') + '\n');
   if (!options.interactive && !process.stdout.isTTY) process.stdout.write(`${result.summary}\n`);
+  bell();
   return result;
 }
 
@@ -425,6 +449,9 @@ export async function reviewOne(url, options = {}) {
   const reporter = options.progress ? toReporter(options.progress) : plainReporter();
   const router = live ? createRouter(reporter) : null;
   const adapters = createAdapters({ ...options, progress: router ?? reporter });
+  const started = Date.now();
+  // The bell (src/bell.mjs) when it's done or failed, in a terminal only.
+  const bell = () => interactive && (options.ring ?? ring)({ started, configPath: options.configPath });
   const result = await runPipeline(url, {
     root: options.outputRoot ?? join(projectRoot, 'reviews'),
     adapters,
@@ -432,10 +459,11 @@ export async function reviewOne(url, options = {}) {
     live,
     router,
     full: Boolean(options.full),
-  });
+  }).catch((error) => { bell(); throw error; });
   // In the interactive screen the cost table sits above the first question instead.
   printSummary(result, process.stderr, { cost: !(interactive || options.publish) });
   if (interactive || options.publish) {
+    bell();
     await (options.publish ?? publishInTerminal)(result, { adapters });
     return;
   }

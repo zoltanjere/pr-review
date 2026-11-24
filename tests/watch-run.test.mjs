@@ -163,7 +163,7 @@ const until = async (check) => {
   assert(check(), 'timed out waiting');
 };
 
-async function app(t, lists, { events = ['new', 'merged'], outcome } = {}) {
+async function app(t, lists, { events = ['new', 'merged'], outcome, settings } = {}) {
   const { paths } = await folder(t);
   const adapters = { ...adaptersFor(lists, { outcome }), findClone: async () => {} };
   const term = appTerminal();
@@ -173,7 +173,7 @@ async function app(t, lists, { events = ['new', 'merged'], outcome } = {}) {
   const reviewed = [];
   const done = runApp(REPO, adapters, {
     events, intervalMinutes: 5, paths, timers, input: term.input, output: term.output, now: () => NOW,
-    notify: async (n) => { sent.push(n.text); }, review: async (url) => { reviewed.push(url); },
+    notify: async (n) => { sent.push(n.text); }, review: async (url) => { reviewed.push(url); }, settings,
   });
   const tick = () => ticks.find((timer) => timer.ms === 5 * 60_000).fn();
   return { paths, term, done, sent, reviewed, tick, adapters };
@@ -236,4 +236,20 @@ test('failed checks keep the app and its list open, and the third in a row notif
   assert.match(await readFile(run.paths.log, 'utf8'), /poll failed: gh: offline/);
   run.term.press('q');
   await run.done;
+});
+
+test('c in the app opens Settings and comes back to the list with the new setting', async (t) => {
+  let line = 'Provider: Copilot · Model: claude-haiku-5.5';
+  let opened = 0;
+  const settings = { line: async () => line, open: async () => { opened++; line = 'Provider: Claude Code · Model: claude-sonnet-5-5'; } };
+  const run = await app(t, [[pr(1)], [pr(1)]], { settings });
+  await until(() => run.term.text().includes('Provider: Copilot'));
+  assert.match(run.term.text(), /c settings · q quit/);
+  run.term.clear();
+  run.term.press('c');
+  await until(() => run.term.text().includes('Provider: Claude Code'));
+  assert.equal(opened, 1);
+  run.term.press('q');
+  await run.done;
+  assert.deepEqual(run.reviewed, []);
 });

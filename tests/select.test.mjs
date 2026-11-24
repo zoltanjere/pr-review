@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { candidatePrs, choosePr, formatRows, hiddenSummary, ownLabel, pickFromList, reviewedHead } from '../src/select.mjs';
+import { candidatePrs, choosePr, formatRows, hiddenSummary, OPEN_SETTINGS, ownLabel, pickFromList, reviewedHead } from '../src/select.mjs';
 
 const ME = 'me';
 const HEAD = 'a7e50c828a1b2de30d5bec350ee37e1d368490ad';
@@ -160,6 +160,23 @@ test('f picks the highlighted PR for a full review; Enter leaves the choice to t
     assert.deepEqual(choice, { full });
     assert.match(term.text(), /Enter review or summary · f full review · s skip/);
   }
+});
+
+test('with a settings line, the picker shows it and c leaves the list to open Settings', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'picker-state-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const adapters = { findClone: async () => {}, viewer: async () => ME, listOpenPrs: async () => [pr(42)], reviewCommit: async () => null };
+  const term = fakeTerminal();
+  const picked = choosePr('acme/widget', adapters, { ...term, statePath: join(dir, 'picker.json'), settings: 'Provider: Claude Code · Model: claude-sonnet-5-5' });
+  term.press('c');
+  assert.equal(await picked, OPEN_SETTINGS);
+  assert.match(term.text(), /Provider: Claude Code · Model: claude-sonnet-5-5\n/);
+  assert.match(term.text(), /a show skipped · c settings · q cancel/);
+  const plain = fakeTerminal();
+  const url = choosePr('acme/widget', adapters, { ...plain, statePath: join(dir, 'picker.json') });
+  plain.press('c', 'return');
+  assert.equal(await url, 'https://github.com/acme/widget/pull/42');
+  assert.doesNotMatch(plain.text(), /settings/);
 });
 
 test('without a URL, main needs a terminal and defaultRepository, then reviews the picked PR', async (t) => {

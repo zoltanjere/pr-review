@@ -1,5 +1,10 @@
 {
+  "provider": "copilot",
   "model": "claude-sonnet-5.5",
+  "claude": {
+    "model": "claude-sonnet-5-5"
+  },
+  "notify": true,
   "azureDevOpsOrg": "https://dev.azure.com/your-organization",
   "defaultRepository": "your-org/your-repo",
   "watch": {

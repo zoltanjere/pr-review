@@ -90,11 +90,16 @@ test('followUpMode: each row of the decision table, first match wins', () => {
   assert.equal(mode({ own: true }).line, null);
   assert.equal(mode({}).key, 'first');
   // A dismissed review still counts, as what it was posted as.
+  // After an approval (dismissed by a push, too) only the new commits are reviewed.
   const shipped = mode({ latest: review('DISMISSED', `**Verdict:** ✅ Ship. Only minor items.${FOOTER}`) });
-  assert.deepEqual([shipped.mode, shipped.key, shipped.line], ['full', 'approved', 'Full review: your last review was an approval.']);
+  assert.deepEqual([shipped.mode, shipped.approved, shipped.findings, shipped.line], ['follow-up', true, [], null]);
   assert.equal(mode({ latest: review('DISMISSED') }).mode, 'follow-up');
   assert.equal(mode({ latest: review('DISMISSED', 'LGTM') }).key, 'hand-written');
-  assert.deepEqual([mode({ latest: review('APPROVED') })].map((m) => [m.mode, m.key, m.short]), [['full', 'approved', null]]);
+  // Points an approval left open (questions, should-fix approved over) are checked too.
+  assert.deepEqual([mode({ latest: review('APPROVED') })].map((m) => [m.mode, m.approved, m.findings.length]), [['follow-up', true, 3]]);
+  // A hand-written approval: just the new commits.
+  assert.deepEqual([mode({ latest: review('APPROVED', 'LGTM') })].map((m) => [m.mode, m.findings]), [['follow-up', []]]);
+  assert.equal(mode({ latest: review('APPROVED'), history: 'rewritten' }).key, 'rewritten');
   const hand = mode({ latest: review('CHANGES_REQUESTED', '1. 🔴 **x**\n   y') });
   assert.deepEqual([hand.key, hand.short], ['hand-written', 'hand-written review']);
   assert.match(hand.line, /wasn't made by reviewpr/);
@@ -123,6 +128,8 @@ test('followUpMode: a follow-up after Request changes or Comment carries the hea
 
 test('followUpLine counts commits and findings', () => {
   assert.equal(followUpLine({ head: 'a'.repeat(40), commits: 2, findings: 4 }), 'Follow-up of your review at `aaaaaaa`: 2 new commits, 4 findings to check.');
+  assert.equal(followUpLine({ head: 'a'.repeat(40), commits: 1, findings: 0, approved: true }), 'Follow-up of your approval at `aaaaaaa`: 1 new commit, only the new code is reviewed.');
+  assert.equal(followUpLine({ head: 'a'.repeat(40), commits: 0, findings: 0, approved: true, rebased: true }), 'Follow-up of your approval at `aaaaaaa`: rebased, no changes to the PR\'s code, nothing new to review.');
   assert.equal(followUpLine({ head: 'abc1234', commits: 0, findings: 1 }), 'Follow-up of your review at `abc1234`: no new commits, 1 finding to check.');
 });
 
@@ -274,4 +281,25 @@ test('quietMentions: code, emails, paths and bots are left alone', () => {
   assert.equal(quietMentions(kept), kept);
   const fenced = '```\n@lee in a fence\n```\nthen @lee';
   assert.equal(quietMentions(fenced), '```\n@lee in a fence\n```\nthen `@lee`');
+});
+
+test('followUpDigest: fixes made and only questions still open recommend approving', () => {
+  const previous = [
+    { n: 1, severity: 'Should fix', title: 'Head read once', location: '`a.ps1:13`', text: '' },
+    { n: 2, severity: 'Question', title: 'Owners accept the carve-out?', location: '-', text: '' },
+    { n: 3, severity: 'Question', title: 'Is bot approval enough?', location: '-', text: '' },
+  ];
+  const waiting = { status: 'Still open', reply: 'Still waiting on the owners.', evidence: 'No owner replied.', remaining: 'The owners must confirm.' };
+  const digest = followUpDigest({ previous, statuses: [fixed(), waiting, waiting], facts: { ...FACTS, commits: 1 } });
+  assert.match(digest, /^\*\*Verdict:\*\* ✅ Ship\. 2 still open, none blocking\.\n/);
+  assert.equal(verdictFromText(digest).event, 'approve');
+  assert.match(digest, /1\. ❓ Owners accept the carve-out\?/);
+});
+
+test('followUpDigest after an approval: only the new commits, no empty tally, its own heading', () => {
+  const facts = { ...FACTS, commits: 2, approved: true };
+  assert.equal(followUpDigest({ previous: [], statuses: [], facts }),
+    '**Verdict:** ✅ Ship. Nothing new.\n\n> 🔁 **Re-review since the approval at `aaaaaaa`** (2 new commits): only what the new commits changed was checked.');
+  const found = followUpDigest({ previous: [], statuses: [], newBody: '### Should fix\n1. 🟡 **Loop never ends**\n   `a.js:3`\n   Fix: cap it.', newFindings: [{ status: 'Confirmed', priority: 'Should fix' }], facts });
+  assert.match(found, /^\*\*Verdict:\*\* ⚠️ Changes recommended\. 1 new\.\n\n> .*\n> 1 new\.\n\n### New since the approval\n1\. 🟡 \*\*Loop never ends\*\*/);
 });

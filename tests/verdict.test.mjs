@@ -4,7 +4,7 @@ import { alignVerdict, verdictFor, verdictFromText, withVerdict } from '../src/v
 
 const f = (status, priority = '-') => ({ title: 't', status, priority });
 
-test('the verdict is decided by the highest confirmed priority, and an open question is not an approval', () => {
+test('the verdict is decided by the highest confirmed priority; open questions alone ship and don\'t block', () => {
   assert.equal(verdictFor([f('Confirmed', 'Must fix'), f('Confirmed', 'Should fix')]).line, '**Verdict:** 🔴 Fix before merge. 1 must-fix, 1 should-fix.');
   const four = [1, 2, 3, 4].map(() => f('Confirmed', 'Should fix'));
   assert.deepEqual(
@@ -12,8 +12,11 @@ test('the verdict is decided by the highest confirmed priority, and an open ques
     ['**Verdict:** ⚠️ Changes recommended. 4 should-fix, 1 question.', 'comment'],
   );
   assert.deepEqual([verdictFor([f('Question'), f('Question')]).line, verdictFor([f('Question')]).event],
-    ['**Verdict:** 💬 Not approved yet. 2 questions.', 'comment']);
-  assert.equal(verdictFor([f('Question'), f('Confirmed', 'Minor')]).level, 'comment');
+    ['**Verdict:** ✅ Ship. 2 questions, none blocking.', 'approve']);
+  assert.equal(verdictFor([f('Question'), f('Confirmed', 'Minor')]).line, '**Verdict:** ✅ Ship. 1 question, none blocking.');
+  // Comment only over such a Ship still says it isn't an approval.
+  assert.equal(alignVerdict(verdictFor([f('Question')]).line, 'comment').line, '**Verdict:** 💬 Not approved yet. 1 question.');
+  assert.equal(alignVerdict(verdictFor([f('Question')]).line, 'request-changes').line, '**Verdict:** ⚠️ Changes recommended. 1 question.');
   assert.equal(verdictFor([]).line, '**Verdict:** ✅ Ship. No issues found.');
   // Minors are counted in the <details> summary only, never in the verdict line.
   assert.equal(verdictFor([f('Confirmed', 'Minor'), f('Confirmed', 'Minor')]).line, '**Verdict:** ✅ Ship. Only minor items.');

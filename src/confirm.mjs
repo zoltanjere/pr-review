@@ -79,23 +79,25 @@ export function costLines(usage, c = palette(false)) {
   if (!usage?.length) return [];
   const stages = new Map();
   for (const { stage, premium, tokens, credits } of usage) {
-    const row = stages.get(stage) ?? { sessions: 0, premium: 0, tokens: 0, credits: 0, priced: 0, unknown: 0 };
+    const row = stages.get(stage) ?? { sessions: 0, premium: 0, tokens: 0, credits: 0, priced: 0, unknown: 0, tokensOnly: 0 };
     row.sessions++;
-    if (premium === null) row.unknown++;
+    // A Claude Code session reports tokens only: no premium requests.
+    if (premium === null && typeof tokens === 'number') { row.tokens += tokens; row.tokensOnly++; }
+    else if (premium === null) row.unknown++;
     else { row.premium += premium; row.tokens += tokens; }
     if (typeof credits === 'number') { row.credits += credits; row.priced++; }
     stages.set(stage, row);
   }
   const total = [...stages.values()].reduce((sum, row) => ({
     sessions: sum.sessions + row.sessions, premium: sum.premium + row.premium, tokens: sum.tokens + row.tokens,
-    credits: sum.credits + row.credits, priced: sum.priced + row.priced, unknown: sum.unknown + row.unknown,
-  }), { sessions: 0, premium: 0, tokens: 0, credits: 0, priced: 0, unknown: 0 });
+    credits: sum.credits + row.credits, priced: sum.priced + row.priced, unknown: sum.unknown + row.unknown, tokensOnly: sum.tokensOnly + row.tokensOnly,
+  }), { sessions: 0, premium: 0, tokens: 0, credits: 0, priced: 0, unknown: 0, tokensOnly: 0 });
   // 1642000 → "1.6M", 313000 → "313k".
   const k = (tokens) => tokens >= 1_000_000 ? `${(tokens / 1_000_000).toFixed(1)}M` : `${Math.round(tokens / 1000)}k`;
   // AI credits are what token-priced plans pay; tokens alone mislead, since
   // cache reads and cheaper models cost far less per token.
   const credit = (row) => (row.priced ? row.credits.toFixed(2) : '-').padStart(8);
-  const line = (name, row) => `  ${name.padEnd(20)} ${String(row.sessions).padStart(3)} session${row.sessions === 1 ? ' ' : 's'} ${row.premium.toFixed(1).padStart(6)} premium ${k(row.tokens).padStart(7)} tokens ${credit(row)} AI credits${row.unknown ? c.dim(` (${row.unknown} unknown)`) : ''}`;
+  const line = (name, row) => `  ${name.padEnd(20)} ${String(row.sessions).padStart(3)} session${row.sessions === 1 ? ' ' : 's'} ${(row.tokensOnly === row.sessions ? '-' : row.premium.toFixed(1)).padStart(6)} premium ${k(row.tokens).padStart(7)} tokens ${credit(row)} AI credits${row.unknown ? c.dim(` (${row.unknown} unknown)`) : ''}`;
   return ['', c.bold('Cost'), ...[...stages].map(([name, row]) => line(name, row)), c.bold(line('total', total))];
 }
 

@@ -49,8 +49,10 @@ const isCheck = (args) => promptOf(args).startsWith('Verify code-review findings
 
 // Real git against the fixture (fetches redirected to the local repo), faked
 // gh and az, and `copilot(args, options)` for agent calls.
-function mockExecute(f, { metadata = {}, copilot, az, issue, reference, reviews, compare, changes } = {}) {
+function mockExecute(f, { metadata = {}, copilot, claude, az, issue, reference, reviews, compare, changes } = {}) {
   return async (command, args, options) => {
+    // The provider check before a run: installed, and Claude Code signed in.
+    if ((command === 'copilot' || command === 'claude') && (args[0] === '--version' || args[0] === 'auth')) return '1.0.0\n';
     if (command === 'az') return az(args);
     if (command === 'gh') {
       if (args[0] === 'issue') return issue(args);
@@ -62,6 +64,7 @@ function mockExecute(f, { metadata = {}, copilot, az, issue, reference, reviews,
       return JSON.stringify({ baseRefOid: f.base, headRefOid: f.head, title: '', body: '', closingIssuesReferences: [], ...metadata });
     }
     if (command === 'copilot') return copilot(args, options);
+    if (command === 'claude') return claude(args, options);
     if (command === 'git' && args.includes('fetch')) {
       return runCommand(command, args.map((value) => value === 'https://github.com/acme/widget.git' ? f.repo : value), options);
     }
@@ -308,6 +311,40 @@ test('a PR re-reviewed after fixes gets a follow-up: earlier findings checked, n
   assert.match(digest, /\n- ✅ Empty input crashes\n/);
 });
 
+test('an approved PR with new commits gets a follow-up that reviews only the new commits', async (t) => {
+  const f = await reviewedFixture(t);
+  const approval = `**Verdict:** ✅ Ship. Only minor items.\n\n<details><summary>1 minor item</summary>\n\n- \`example.txt:1\`: wording.\n</details>\n\n---\n<sub>Reviewed at \`${f.old.slice(0, 7)}\` with AI assistance. Each finding was checked against the code.</sub>\n`;
+  // A push dismissed the approval, as branch protection does.
+  const reviews = (args) => (args.at(-1).endsWith('/reviews')
+    ? JSON.stringify([[{ user: { login: 'me' }, state: 'DISMISSED', body: approval, commit_id: f.old, submitted_at: '2026-01-01T00:00:00Z' }]])
+    : '[[]]');
+  const output = join(f.root, 'reviews');
+  const prompts = [];
+  const copilot = (args) => {
+    const prompt = promptOf(args);
+    prompts.push(prompt);
+    const model = args[args.indexOf('--model') + 1];
+    if (prompt.startsWith('Review only the new commits')) return jsonl([message('No findings.', model)]);
+    return goodAgent(args);
+  };
+  const lines = [];
+  const { main } = await import('../src/review.mjs');
+  await main(['https://github.com/acme/widget/pull/42'], {
+    projectsRoot: f.root, configPath: f.config, outputRoot: output, progress: (line) => lines.push(line),
+    execute: mockExecute(f, { copilot, reviews, metadata: f.metadata }),
+  });
+  assert.deepEqual(prompts.map((prompt) => prompt.split('\n')[0].slice(0, 27)), ['Review only the new commits']);
+  assert.match(prompts[0], /covered the PR up to [0-9a-f]{40} and approved it; the author has since pushed more commits\./);
+  assert.doesNotMatch(prompts[0], /earlier findings?/);
+  assert(lines.some((line) => line.includes(`Follow-up of your approval at \`${f.old.slice(0, 7)}\`: 1 new commit, only the new code is reviewed.`)));
+  const [day] = await readdir(output);
+  const dir = join(output, day, 'widget-PR42');
+  assert.deepEqual((await readdir(dir)).map((file) => file.replace(/^\d{4}-/, '')).sort(), ['digest.md', 'scan.md', 'verified.md']);
+  const digest = await readFile(join(dir, (await readdir(dir)).find((file) => file.endsWith('-digest.md'))), 'utf8');
+  assert.match(digest, /^\*\*Verdict:\*\* ✅ Ship\. Nothing new\.\n/);
+  assert.match(digest, new RegExp(`Re-review since the approval at \`${f.old.slice(0, 7)}\`\\*\\* \\(1 new commit\\): only what the new commit changed was checked\\.`));
+});
+
 test('a rebase that left the PR\'s changes as they were is still a follow-up, with no scan', async (t) => {
   const f = await reviewedFixture(t);
   const output = join(f.root, 'reviews');
@@ -551,6 +588,11 @@ test('the check prompt makes verify trace a claimed example and skip what the PR
   assert.match(prompts[0], /already stated in the PR/);
   assert.match(prompts[0], /proof of that same check \(same tool or command\)/);
   assert.match(prompts[0], /Quote the PR's words/);
+  assert.match(prompts[0], /never give a fix that undoes the stated behaviour/);
+  assert.match(prompts[0], /A cost or scale concern with no failure shown/);
+  assert.match(prompts[0], /only stops the tool or skips an item with a message/);
+  assert.match(prompts[0], /A failure that needs an unusual trigger/);
+  assert.match(prompts[0], /A missing check on a one-off manual step/);
   assert.match(prompts[0], /whether the PR body already states what a finding describes/);
   assert.match(prompts[0], /counts as stated only while that condition is unmet/);
   assert.match(prompts[0], /read the whole section the cited line belongs to/);
@@ -748,4 +790,162 @@ test('--summary runs one session on the check model, saves the summary, posts no
   assert.deepEqual(files.map((file) => file.replace(/^\d{4}-/, '')), ['summary.md']);
   assert.equal(await readFile(join(dir, files[0]), 'utf8'), 'The example file now says after instead of before.\n\n_1 file · +1 −1_\n');
   assert.deepEqual(await readdir(temp), []);
+});
+
+// Claude Code stream-json builders.
+const CLAUDE_MODEL = 'claude-sonnet-5-5';
+const claudeUse = (id, name, input, model) => ({ type: 'assistant', parent_tool_use_id: null, message: { id: `m-${id}`, model, content: [{ type: 'tool_use', id, name, input }] } });
+const claudeToolResult = (id, content) => ({ type: 'user', parent_tool_use_id: null, message: { content: [{ type: 'tool_result', tool_use_id: id, content, is_error: false }] } });
+const claudeDone = (text, model) => ({ type: 'result', subtype: 'success', is_error: false, result: text, modelUsage: { [model]: { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 100, cacheCreationInputTokens: 0 } } });
+const claudeSkillOf = (args) => /^Load the prreview:([\w-]+) skill with the Skill tool first/.exec(args.at(-1))?.[1];
+
+// A well-behaved Claude Code agent: loads the plugin skill and, for
+// code-review, runs a foreground subagent.
+function goodClaude(args, { skip = false } = {}) {
+  const model = args[args.indexOf('--model') + 1];
+  const prompt = args.at(-1);
+  const skill = claudeSkillOf(args);
+  if (!skill) {
+    let text;
+    if (prompt.startsWith('Verify code-review findings')) {
+      const count = JSON.parse(/Findings \(JSON[^\n]*\n(\[[\s\S]*?\n\])\n/.exec(prompt)[1]).length;
+      text = JSON.stringify(Array.from({ length: count }, (_, i) => ({ n: i + 1, ...VERDICT })));
+    } else {
+      text = JSON.stringify([{ title: 'Example problem', tier: 'A', raisedBy: ['ponytail-review'], location: 'example.txt:1', claim: 'c', fix: '' }]);
+    }
+    return jsonl([claudeDone(text, model)]);
+  }
+  const content = { 'code-review': '## Standards\nNo findings.\n\n## Spec\nNo spec available.', 'review-digest': '**Verdict:** ✅ Ship.' }[skill] ?? skill;
+  return jsonl([
+    ...(skip ? [] : [claudeUse('s', 'Skill', { skill: `prreview:${skill}` }, model), claudeToolResult('s', `Launching skill: prreview:${skill}`)]),
+    ...(skill === 'code-review' ? [claudeUse('a', 'Agent', { prompt: 'Standards' }, model), claudeToolResult('a', 'done')] : []),
+    claudeDone(content, model),
+  ]);
+}
+
+test('readConfig: provider defaults to copilot; claude takes its models from the claude block', async (t) => {
+  const { readConfig } = await import('../src/adapters.mjs');
+  const root = await mkdtemp(join(tmpdir(), 'review-provider-config-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'config.json');
+  const read = async (config) => { await writeFile(path, JSON.stringify(config)); return readConfig(path); };
+  assert.deepEqual(await read({ model: 'm' }), { model: 'm', provider: 'copilot' });
+  const claude = await read({ provider: 'claude', model: 'copilot-m', checkModel: 'copilot-c', claude: { model: CLAUDE_MODEL } });
+  assert.equal(claude.provider, 'claude');
+  assert.equal(claude.model, CLAUDE_MODEL);
+  assert.equal(claude.checkModel, undefined);
+  assert.equal((await read({ provider: 'claude', claude: { model: CLAUDE_MODEL, checkModel: 'claude-haiku-5-5' } })).checkModel, 'claude-haiku-5-5');
+  for (const [config, pattern] of [
+    [{ provider: 'openai', model: 'm' }, /provider .* must be "copilot" or "claude"/],
+    [{ provider: 'claude', model: 'm' }, /claude\.model .* when provider is "claude"/],
+    [{ provider: 'claude', claude: { model: ' x' } }, /claude\.model/],
+    [{ provider: 'claude', claude: { model: 'x', checkModel: '' } }, /claude\.checkModel/],
+    [{ provider: 'copilot', claude: { model: 'x' } }, /must contain one non-empty model ID/],
+  ]) {
+    await assert.rejects(read(config), pattern);
+  }
+});
+
+test('with provider claude, every stage runs claude -p, isolated, with the skills as a plugin; nothing else changes', async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.config, JSON.stringify({ model: MODEL, provider: 'claude', claude: { model: CLAUDE_MODEL } }));
+  const projects = join(f.root, 'claude-projects');
+  const calls = [];
+  const execute = mockExecute(f, {
+    copilot: () => { throw new Error('copilot must not run'); },
+    claude: async (args, options) => {
+      calls.push({ args, options });
+      const plugin = args[args.indexOf('--plugin-dir') + 1];
+      assert.equal(JSON.parse(await readFile(join(plugin, '.claude-plugin', 'plugin.json'), 'utf8')).name, 'prreview');
+      await access(join(plugin, 'skills', 'code-review', 'SKILL.md'));
+      // What Claude Code leaves behind for the working directory.
+      await mkdir(join(projects, options.cwd.replace(/[^a-zA-Z0-9]/g, '-'), 'subagents'), { recursive: true });
+      return goodClaude(args);
+    },
+  });
+  const events = [];
+  const adapters = createAdapters({ projectsRoot: f.root, configPath: f.config, claudeProjects: projects, execute, progress: { event: (type, data) => events.push([type, data]), note() {}, warn() {}, start() {}, finish() {}, fail() {}, done() {} } });
+  const result = await adapters.prepare(PR);
+  t.after(() => result.cleanup());
+  assert.equal(result.provider, 'claude');
+  assert.equal(result.model, CLAUDE_MODEL);
+  assert.deepEqual(events.find(([type]) => type === 'model')[1], { provider: 'claude', model: CLAUDE_MODEL, checkModel: undefined });
+  assert.match(await adapters.review('code-review', result), /## Standards/);
+  assert.equal(await adapters.review('ponytail-review', result), 'ponytail-review');
+  assert.match((await adapters.verify({ 'ponytail-review': 'one', 'code-review': 'two' })).markdown, /### 1\. Example problem \(Confirmed\)/);
+  assert.match(await adapters.digest('verified'), /✅ Ship/);
+  assert.equal(calls.length, 5);
+  for (const { args, options } of calls) {
+    assert.equal(options.cwd, result.checkout);
+    assert.equal(options.env.CLAUDE_CODE_DISABLE_AUTO_MEMORY, '1');
+    assert.equal(args[args.indexOf('--model') + 1], CLAUDE_MODEL);
+    assert.equal(args[args.indexOf('--add-dir') + 1], result.workspace);
+    assert.equal(args[args.indexOf('--setting-sources') + 1], '');
+    assert(args.includes('--strict-mcp-config'));
+    assert(args.includes('Bash(git diff:*)'));
+    assert.equal(args.at(-2), '--');
+    assert.match(args.at(-1), /set its model argument to sonnet\.$/);
+  }
+  assert.match(calls[0].args.at(-1), /^Load the prreview:code-review skill with the Skill tool first, then follow it\.\n/);
+  assert.match(calls[0].args.at(-1), /with the Agent tool in the foreground \(never in the background\)/);
+  assert.doesNotMatch(calls[0].args.at(-1), /task tool/);
+  assert.equal(await readdir(projects).then((names) => names.length), 0, 'the checkout\'s Claude project folder is removed');
+  const usage = adapters.usage();
+  assert.equal(usage.length, 5);
+  assert(usage.every((entry) => entry.tokens === 115 && entry.credits === null && entry.premium === null));
+});
+
+test('the Claude Code provider stops on Windows before any command runs', async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.config, JSON.stringify({ provider: 'claude', claude: { model: CLAUDE_MODEL } }));
+  const adapters = createAdapters({ projectsRoot: f.root, configPath: f.config, platform: 'win32', progress: () => {}, execute: async () => { throw new Error('unexpected command'); } });
+  await assert.rejects(adapters.prepare(PR), /not supported on Windows yet/);
+});
+
+test('with provider claude, a skill not loaded and an inline code-review are retried once with a note', async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.config, JSON.stringify({ provider: 'claude', claude: { model: CLAUDE_MODEL } }));
+  const prompts = [];
+  const claude = (args) => {
+    prompts.push(args.at(-1));
+    const retry = /A previous attempt/.test(args.at(-1));
+    if (retry) return goodClaude(args);
+    if (claudeSkillOf(args) === 'ponytail-review') return goodClaude(args, { skip: true });
+    // code-review answered inline: the skill loads but no subagent runs.
+    const model = args[args.indexOf('--model') + 1];
+    return jsonl([claudeUse('s', 'Skill', { skill: 'prreview:code-review' }, model), claudeToolResult('s', 'Launching skill: prreview:code-review'),
+      claudeDone('## Standards\nNone.\n\n## Spec\nNo spec available.', model)]);
+  };
+  const adapters = createAdapters({ projectsRoot: f.root, configPath: f.config, claudeProjects: join(f.root, 'p'), progress: () => {}, execute: mockExecute(f, { claude }) });
+  const result = await adapters.prepare(PR);
+  t.after(() => result.cleanup());
+  assert.equal(await adapters.review('ponytail-review', result), 'ponytail-review');
+  assert.match(prompts[1], /A previous attempt did not load the prreview:ponytail-review skill\. Load it with the Skill tool first/);
+  assert.match(await adapters.review('code-review', result), /## Standards/);
+  assert.match(prompts[3], /A previous attempt answered inline\. .*launch each review axis with the Agent tool in the foreground/);
+  assert.equal(prompts.length, 4);
+});
+
+test('a review or summary in a terminal rings the bell once when done or failed; --yes never rings', async (t) => {
+  const f = await fixture(t);
+  const { reviewOne, summaryOne } = await import('../src/review.mjs');
+  const temp = join(f.root, 'tmp');
+  await mkdir(temp);
+  const base = { projectsRoot: f.root, configPath: f.config, outputRoot: join(f.root, 'reviews'), tempRoot: temp, progress: () => {}, menuOutput: { write: () => {} } };
+  const rings = [];
+  const ring = (args) => { rings.push(args); return true; };
+  const summary = () => jsonl([message('The example file now says after.', MODEL)]);
+  await summaryOne('https://github.com/acme/widget/pull/42', { ...base, interactive: true, ring, execute: mockExecute(f, { copilot: summary }) });
+  assert.equal(rings.length, 1);
+  assert.equal(typeof rings[0].started, 'number');
+  assert.equal(rings[0].configPath, f.config);
+  await summaryOne('https://github.com/acme/widget/pull/42', { ...base, interactive: false, ring, execute: mockExecute(f, { copilot: summary }) });
+  assert.equal(rings.length, 1, 'not interactive: no bell');
+  const failing = () => { throw new Error('model down'); };
+  await assert.rejects(summaryOne('https://github.com/acme/widget/pull/42', { ...base, interactive: true, ring, execute: mockExecute(f, { copilot: failing }) }), /model down/);
+  assert.equal(rings.length, 2, 'a failure rings too');
+  let published = 0;
+  await reviewOne('https://github.com/acme/widget/pull/42', { ...base, interactive: true, ring, publish: async () => { assert.equal(rings.length, 3, 'rings before the decision screen'); published++; }, execute: mockExecute(f, { copilot: goodAgent }) });
+  assert.equal(published, 1);
+  assert.equal(rings.length, 3);
 });

@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAdapters, readConfig } from './adapters.mjs';
 import { isSkipped, loadJson, loadState, saveJson } from './picker-state.mjs';
-import { age, choosePr, scanRepo } from './select.mjs';
+import { age, choosePr, OPEN_SETTINGS, scanRepo } from './select.mjs';
 import { WATCH_EVENTS, departed, notify as showNotification, watchConfig, watchEvents } from './watch.mjs';
 
 // Running watch: one poll (shared by the launchd mode and the interactive
@@ -214,7 +214,7 @@ export async function watchCommand(args, options = {}) {
   }
   const interactive = options.interactive ?? Boolean(process.stdin.isTTY && process.stderr.isTTY);
   if (!interactive) throw new Error('The interactive watch needs a terminal. In the background, use reviewpr watch --install.');
-  await runApp(config.defaultRepository, adapters, { events, intervalMinutes, paths, notify: options.notify, review: options.review, input: options.input, output: options.output });
+  await runApp(config.defaultRepository, adapters, { events, intervalMinutes, paths, notify: options.notify, review: options.review, settings: options.settings, input: options.input, output: options.output });
 }
 
 // Events that never become picker rows: they show on the status line only.
@@ -226,7 +226,7 @@ const FAILURES_BEFORE_NOTICE = 3;
 // place, and Enter runs a review in this terminal and comes back here. Holds
 // the lock so the launchd mode stays quiet meanwhile; q quits and frees it.
 export async function runApp(repo, adapters, {
-  events, intervalMinutes, paths = PATHS, notify = showNotification, review, input, output = process.stderr,
+  events, intervalMinutes, paths = PATHS, notify = showNotification, review, settings, input, output = process.stderr,
   now = () => Date.now(), pick = choosePr, alive, timers = { setInterval, clearInterval },
 } = {}) {
   if (lockState(paths.lock, { now: now(), alive }) === 'live') throw new Error('Another reviewpr watch is already running in a terminal.');
@@ -296,7 +296,11 @@ export async function runApp(repo, adapters, {
   try {
     for (;;) {
       let full = false;
-      const url = await pick(repo, adapters, { input, output, watch, statePath: paths.picker, onPick: (choice) => { full = Boolean(choice?.full); } });
+      const url = await pick(repo, adapters, { input, output, watch, statePath: paths.picker, settings: await settings?.line(), onPick: (choice) => { full = Boolean(choice?.full); } });
+      if (url === OPEN_SETTINGS) {
+        await settings.open();
+        continue;
+      }
       if (!url) break;
       try {
         await review(url, { full });

@@ -120,6 +120,30 @@ Each entry has three parts:
 - **Decision:** Read `copilot` stdout line by line and drop the `tool.shell_output` events. Use `--output-format=json --stream off`.
 - **Why:** One `git grep` once produced 114 MB of JSONL, which overflowed `execFile`'s buffer. The pipeline never reads those events.
 
+### 3.8 Claude Code as a second provider
+- **Decision:** `"provider": "claude"` runs every agent as `claude -p` instead of `copilot`, signed in with the person's own Claude login. Everything is per run (`src/claude.mjs`):
+  - `--setting-sources ""`, `--strict-mcp-config`, `--no-session-persistence` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`: no personal settings, `CLAUDE.md`, memory, hooks, plugins or MCP servers.
+  - `--permission-mode dontAsk`, `--tools Skill,Read,Grep,Glob,Bash,Agent`, `Bash(git <sub>:*)` allows for the same read-only subcommands, and Write, Edit, NotebookEdit, WebFetch and WebSearch denied. The prompt comes after `--`, because the allow and deny options take several values.
+  - Skills come from a plugin in the workspace (`--plugin-dir`), as `prreview:<name>`. The prompt asks for the Skill tool; the check is a `Skill` call for `prreview:<name>` whose result says `Launching skill: prreview:<name>`.
+  - The same model check (every message, subagents included), the same code-review subagent count (foreground `Agent` calls) and the same retries.
+  - Models are kept per provider (`claude.model`, `claude.checkModel`). Subagents are told the family alias (`sonnet`), which the Agent tool takes.
+  - The checkout's folder in `~/.claude/projects` is removed after each step.
+  - Usage is tokens only.
+- **Why:**
+  - **It uses the Claude plan the person already has.** Copilot's bring-your-own-key mode needs a paid API key, and the Agent SDK is meant for API keys.
+  - **`--bare` is ruled out:** it accepts only an API key, not a claude.ai login.
+  - **Skills through `--add-dir` don't load** once setting sources are off, and the plugin prefix keeps Claude Code's built-in `code-review` from answering instead.
+  - **A slash-command prompt (`/prreview:<name>`) loads the skill without any event,** so nothing could prove it loaded.
+  - **Claude Code allows read-only commands in the working directory by itself** (`git status`, pipes to `head`). That is still read-only. Reads outside the checkout and workspace, `git -C` and writes are refused, which a spike confirmed.
+  - **Even with session persistence off, it writes subagent notes** per working directory. The checkout is disposable, so that folder is ours to remove.
+  - **The reported `costUSD` is an API list price,** not what a plan charges, so it isn't shown.
+- **Don't:** Change `~/.claude` or `~/.copilot` to make a provider work. The choice must stay inside this project.
+
+### 3.9 Setup problems are named before any work
+- **Decision:** `prepare` first runs `<provider> --version`, and `claude auth status` for Claude Code, before cloning (`src/setup.mjs`). Any failed `gh`, `git`, `copilot` or `claude` call that's a missing program (ENOENT) or a sign-in error starts its message with one line: what's missing and the command that fixes it (`gh auth login`, `copilot login`, `claude auth login`). The raw error follows. For a provider, the line also points to `reviewpr settings`.
+- **Why:** On a new machine, `spawn claude ENOENT` after a minute of cloning says neither what's wrong nor what to do. `claude auth status` is local and uses no tokens. Copilot has no such status command, so its sign-in error gets the hint when the first agent runs.
+- **Don't:** Check sign-in by starting a model session: that costs a request every run.
+
 ## 4. Verify
 
 ### 4.0 Two sessions: list and tier, then one focused check
@@ -177,6 +201,8 @@ Each entry has three parts:
 ### 4.2c What the PR already says is not a finding
 - **Decision:** Verify rejects a finding as "already stated in the PR" when the PR body already says what it describes: a gap, limitation or deferral (such as a requirement named as a follow-up), or a check the PR says was run when the finding only asks for proof of that same check (same tool or command). Verify quotes the PR's words. The exception is when the merged code does something wrong because of the gap, or the code gives a concrete reason to doubt the stated check. Verify reads the PR context for this, not only for requirement findings.
   - **Conditions:** a statement tied to a condition ("stays a draft until #163 merges", "after X lands") counts as stated only while the condition is unmet. Verify checks `isDraft` and `references` in the context; once the condition is met, the promised step is due and the finding is judged on its own.
+  - **Partly stated:** when the PR states only part of what a finding describes, only the rest is confirmed: the title, finding and fix are rewritten to cover the unstated part alone, and the fix never undoes the stated behaviour.
+  - **Unclear documents:** a finding that a sentence is unclear or contradictory must quote the whole sentence and say how the two readings differ. If the sentence already says what happens in the case raised, or the fix restates it, the finding is rejected.
   - **Weakened protections:** a stated trade-off that removes or weakens a protection (required or code-owner review, access control, a merge, release or deploy gate) is not rejected. It becomes a Question asking whether the owners of that protection agreed, quoting the PR.
 - **Why:**
   - A PR listed three acceptance criteria as follow-ups. Verify noted the gap was "real but disclosed" and still rated it Should fix, so the comment repeated the author's own words back to them.
@@ -223,14 +249,14 @@ Each entry has three parts:
   |---|---|---|
   | any Must fix | 🔴 Fix before merge | Request changes |
   | any Should fix | ⚠️ Changes recommended | Comment only |
-  | any Question (no Must or Should fix) | 💬 Not approved yet | Comment only |
-  | only Minor or none | ✅ Ship | Approve |
+  | only Questions, Minor or none | ✅ Ship (with questions: "2 questions, none blocking.") | Approve |
 
-  The counts on the line ("4 should-fix, 1 question.") are computed in code too. Minor items are counted only in the `<details>` summary, so the two numbers can't disagree when the digest merges related minor lines; with only minor items the line says "Only minor items." The `<details>` summary is counted in code too: every Minor, plus the Should fix items and Questions that didn't fit the five visible slots (verify's count minus the numbered 🟡 and ❓ entries shown), for example "1 question and 5 minor items". A run once said "2 questions" in the verdict but showed one, because the model's summary counted the folded question as a minor item. When the person approves over open should-fix items or questions, the line becomes "✅ Ship. 1 should-fix, 1 question, none blocking." so the posted comment matches the decision without an edit.
+  The counts on the line ("4 should-fix, 1 question.") are computed in code too. Minor items are counted only in the `<details>` summary, so the two numbers can't disagree when the digest merges related minor lines; with only minor items the line says "Only minor items." The `<details>` summary is counted in code too: every Minor, plus the Should fix items and Questions that didn't fit the five visible slots (verify's count minus the numbered 🟡 and ❓ entries shown), for example "1 question and 5 minor items". A run once said "2 questions" in the verdict but showed one, because the model's summary counted the folded question as a minor item. When the person approves over open should-fix items, the line becomes "✅ Ship. 1 should-fix, 1 question, none blocking." so the posted comment matches the decision without an edit; choosing Comment only or Request changes drops "none blocking".
 - **Why:**
   - An earlier rule, "✅ Ship unless there is a Must fix", produced "✅ Ship" above four Should fix items and recommended Approve. The person had to override it by hand.
   - With the line written by the model there were two sources of truth; now there is one.
-  - An open Question waits for an answer, so it recommends Comment only, not Approve (user decision, 2026-11-24). Earlier, questions didn't affect the verdict: a follow-up whose two open points both asked whether the owners accepted removing a protection said "✅ Ship. 2 still open." and preselected Approve, which would have undercut its own questions. Approving stays one choice away, and the line then reads "✅ Ship. 2 questions, none blocking."
+  - Open Questions alone recommend Approve, and the line says they don't block (user decision, 2026-11-24, replacing the morning's "an open question isn't an approval"). A Question is something unclear, not a problem found: it isn't a Must or Should fix. The author sees the questions in the approved comment and answers them, and a question that turns up a real problem stops the merge there. Holding the approval back for them cost a round trip on PRs that were otherwise done: a follow-up whose fixes were all made, with two questions waiting on the code owners, recommended Comment only.
+  - The follow-up already reads the replies since the last review: a Question counts as resolved when a reply answers it, so an answered question isn't asked again. A reply that only says the question is still waiting isn't an answer.
   - Should fix doesn't block a merge, so ⚠️ recommends Comment only. A Haiku run once gave Should fix to a test nit and recommended Request changes on a correct PR. A priority one level too high should cost a comment, not a blocked PR (user decision).
 - **Don't:**
   - Let the skill write the verdict again.
@@ -239,7 +265,7 @@ Each entry has three parts:
 ### 5.2a The person's choice wins
 - **Decision:** The recommendation follows the digest's current verdict line, so an edited line changes it. When the person picks a review type that contradicts the verdict line, the line is rewritten before posting and the saved digest is updated:
   - Approve gives ✅ Ship;
-  - Request changes on ✅ or 💬 gives ⚠️ Changes recommended;
+  - Request changes on ✅ gives ⚠️ Changes recommended;
   - Comment only on ✅ gives 💬 Not approved yet.
 - **Why:** The posted comment must never say "Ship" on a review that requests changes, or the reverse.
 
@@ -392,10 +418,11 @@ Each entry has three parts:
 - **Don't:** Send PR titles to a third-party push service. They are the reviewed repository's data.
 
 ### 7.5 Follow-up review after fixes
-- **Decision:** reviewing a PR again after your Request changes or Comment runs a follow-up instead of a full review, when it can (`src/follow-up.mjs`).
-  - **Source:** your latest posted review on GitHub (REST, which gives the full commit and the time): its numbered findings and the commit in its footer. Reviews you didn't post, and minor items inside `<details>`, aren't read. A review GitHub dismissed counts as what it was posted as (7.3), so a dismissed approval gets "your last review was an approval", not a first review.
-  - **Decided in code before any model runs,** first match wins: `--full` or `f`; your own PR; no review yet; your last review was an approval; a review without the reviewpr footer; a review without numbered findings; a reviewed commit that is no longer an ancestor of the head (GitHub's compare status `diverged`/`behind`, confirmed with `git merge-base --is-ancestor`); a reviewed commit GitHub no longer has. Each fallback has one reason, said in the terminal before the run, on the picker row (from the compare call the row already makes) and to the author under the verdict.
+- **Decision:** reviewing a PR again after your Request changes, Comment or Approve runs a follow-up instead of a full review, when it can (`src/follow-up.mjs`).
+  - **Source:** your latest posted review on GitHub (REST, which gives the full commit and the time): its numbered findings and the commit in its footer. Reviews you didn't post, and minor items inside `<details>`, aren't read. A review GitHub dismissed counts as what it was posted as (7.3), so a dismissed approval is followed up as an approval, not as a first review.
+  - **Decided in code before any model runs,** first match wins: `--full` or `f`; your own PR; no review yet; a review without the reviewpr footer or without numbered findings, unless it was an approval; a reviewed commit that is no longer an ancestor of the head (GitHub's compare status `diverged`/`behind`, confirmed with `git merge-base --is-ancestor`); a reviewed commit GitHub no longer has. Each fallback has one reason, said in the terminal before the run, on the picker row (from the compare call the row already makes) and to the author under the verdict.
   - **Steps:** one check session (the check model) gives each earlier finding Fixed, Partly fixed, Answered (accepted or disputed) or Still open, from the new-code diff, the current files and the replies since the review. One scan session reviews only the new code, told the earlier findings so it doesn't repeat them; verify checks its findings as usual. The scan is skipped without new code.
+  - **After an approval:** only the scan of the new commits runs, plus the check of any numbered points the approval left open (questions, should-fix items approved over). An approval without such points, or written by hand, has nothing to check, so there is no check session. The notice reads "Re-review since the approval at `abc1234` (2 new commits): only what the new commits changed was checked.", new findings come under "New since the approval", and with nothing new the verdict is "✅ Ship. Nothing new." (user decision, 2026-11-24).
   - **Unchanged rebase:** when the reviewed commit is no longer an ancestor but the PR's own changes are the same (the picker's comparison), it's still a follow-up, with no new code to scan; the notice says `(rebased, no changes to the PR's code)`.
   - **New code:** `git diff <reviewed> <head>` limited to the files the PR changes, so a merge from the base branch isn't reviewed as the PR's work; the notice says when one happened.
   - **Digest:** written in code (the verdict, a two-line re-review notice, still open, resolved); the review-digest skill writes only the new findings, renumbered after the still-open ones. Still open and new findings stay numbered, and the footer reads `Follow-up at <head> of the review at <old>`, so the next follow-up reads it the same way.
@@ -403,6 +430,7 @@ Each entry has three parts:
 - **Why:**
   - **The question after fixes is narrower:** were the points fixed or answered, and did the fixes break anything. A full review answers a different one, and its fresh sample of findings on unchanged code is unfair to an author who did what was asked.
   - **Replies matter:** a full review doesn't read them and raises answered points again.
+  - **A push dismisses an approval** where branch protection asks for it, so re-approving after small follow-up commits is common. The earlier code was already reviewed and approved; a full review of it again costs two reviewer sessions and samples fresh findings on code nobody changed. Earlier, an approval always got a full review.
   - **The posted review is what the author saw.** The digest may have been edited before posting, and local runs don't record their commit.
   - **The notice is a template, not model text,** so its scope and counts always match what ran.
   - **Resolved points are one line each** (✅ or 💬 and the title, cut at 80 characters): the author made the fix and needs no explanation, and the first version's evidence and quoted replies made a follow-up longer than a full review. Open points keep their reason, since those need action. The evidence stays in the saved `follow-up` stage.
@@ -423,6 +451,16 @@ Each entry has three parts:
   - **The check model:** one short text needs no reviewer-grade model.
   - **Never posted:** it's for you, to decide; the PR already has its author's description.
 - **Don't:** Ask for a fixed word count the run fails on. A long summary is shown with a note instead.
+
+### 7.7 The terminal bell when a run is done
+- **Decision:** an interactive review or summary writes one BEL character (`\x07`) to the terminal when it's done (the review just before the decision screen) or fails (`src/bell.mjs`). Only when the output is a terminal, the run is interactive and took at least 30 s, and `notify` isn't `false`. The Settings screen has a Bell row for it.
+- **Why:**
+  - **Runs take minutes,** so people work elsewhere meanwhile and had no sign the run was waiting for them.
+  - **The bell works everywhere with nothing installed:** the terminal decides how to show it (a dock bounce or badge on macOS, a flashing taskbar button in Windows Terminal). Nothing is spawned, so it can't fail on any platform.
+  - **Not watch's notifier (terminal-notifier):** its style is set per app in macOS. The watch alerts are set to stay on screen so they can be read, and "run finished" would then stay on screen too (user decision, 2026-11-24).
+  - **Not `node-notifier`:** a new dependency with native helpers for a small feature.
+  - **Under 30 s,** you were probably watching. `notify` is read when the run ends, so turning it off applies at once.
+- **Don't:** If a banner is wanted later, send it through `osascript` only, never terminal-notifier: macOS files those under another app (Script Editor), whose style can stay a short banner (plans/run-notification.md).
 
 ## 8. Evaluation
 

@@ -31,10 +31,13 @@ export const verdictLine = lineFor;
 
 export function verdictFor(findings = []) {
   const has = (priority) => findings.some((item) => item.status === 'Confirmed' && item.priority === priority);
-  // An open Question waits for an answer, so it isn't an approval yet.
+  // A Question is something unclear, not a problem found: with nothing else
+  // open the PR ships, and the line says the questions don't block. The
+  // author still sees and answers them.
   const asks = findings.some((item) => item.status === 'Question');
-  const level = has('Must fix') ? 'block' : has('Should fix') ? 'changes' : asks ? 'comment' : 'ship';
-  return { level, ...LEVELS[level], line: lineFor(level, counts(findings)) };
+  const level = has('Must fix') ? 'block' : has('Should fix') ? 'changes' : 'ship';
+  const rest = counts(findings);
+  return { level, ...LEVELS[level], line: lineFor(level, level === 'ship' && asks ? rest.replace(/\.$/, ', none blocking.') : rest) };
 }
 
 // Reads the level back from a digest's verdict line, which a person may have edited.
@@ -91,6 +94,8 @@ export function alignVerdict(digest, event, { own = false } = {}) {
   const old = VERDICT_LINE.exec(digest)?.[0];
   let rest = old ? old.replace(/^\s*\*\*Verdict:\*\*\s*\S+\s+[^.]*\.\s*/, '').trim() : '';
   // Approving over open should-fix items or questions: say they don't block.
+  // Not approving: they no longer go without saying, so drop that.
+  if (target !== 'ship') rest = rest.replace(/, none blocking\.$/, '.');
   if (target === 'ship' && /\b(?:must-fix|should-fix|questions?|still open|\d+ new)\b/.test(rest)) rest = rest.replace(/\.$/, ', none blocking.');
   const line = lineFor(target, rest || '').trimEnd();
   const updated = old ? digest.replace(VERDICT_LINE, `${line}\n`) : `${line}\n\n${digest}`;

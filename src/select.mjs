@@ -106,11 +106,12 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
       const how = unchanged === 'rebased' ? 'rebased only' : `merged ${pr.baseRefName || 'the base branch'} only`;
       return { ...at('unchanged', newer?.last ?? pr.updatedAt), ...pushed, label: mine.state === 'APPROVED' ? `approved · ${how}` : how };
     }
-    if (mine.state === 'APPROVED') return { ...at('approved', newer?.last ?? pr.updatedAt), ...pushed, label: `approved · ${what}` };
     // When Enter can't run a follow-up (history rewritten, a hand-written
-    // review…), say so before it's pressed.
+    // review…), say so before it's pressed. After an approval, Enter reviews
+    // only the new commits.
     const mode = followUpMode({ latest: { state: mine.state, body: mine.body, commit: covered }, history: ancestry(newer?.status) });
     const fallback = mode.mode === 'full' && mode.short ? ` · full review: ${mode.short}` : '';
+    if (mine.state === 'APPROVED') return { ...at('approved', newer?.last ?? pr.updatedAt), ...pushed, followUp: mode.mode === 'follow-up', label: `approved · ${what}${fallback}` };
     return { ...at('fixes', newer?.last ?? pr.updatedAt), ...pushed, followUp: mode.mode === 'follow-up', label: `${what}${fallback}` };
   }
   // The age is its own column (formatRows), so labels only add what the
@@ -282,8 +283,10 @@ export function pickFromList(title, rows, { input = process.stdin, output = proc
       else if (text && actions[text]) {
         const update = actions[text](index);
         if (!update) return undefined;
-        // An action may pick the row, like Enter (f: full review).
+        // An action may pick the row, like Enter (f: full review), or leave
+        // the list with its own value (c: settings).
         if (update.choose) return selectable(index) ? finish(index) : undefined;
+        if (update.exit !== undefined) return finish(update.exit);
         apply(update);
       } else return undefined;
       draw();
@@ -356,6 +359,9 @@ export async function scanRepo(repo, adapters, { now = Date.now(), seenAt = null
   return { viewer, all, list };
 }
 
+// What choosePr returns when `c` was pressed: open Settings, then pick again.
+export const OPEN_SETTINGS = Symbol('settings');
+
 // Lists the default repository's PRs that need review and lets the person pick
 // one. The loading is a visible step ("Loading open PRs of owner/repo" with
 // what it is doing right now), so the terminal never sits silent. `s` skips
@@ -366,7 +372,9 @@ export async function scanRepo(repo, adapters, { now = Date.now(), seenAt = null
 // refreshes in place, marks new PRs with • until the cursor reaches them, and
 // shows a status line: watch = { scanner(status, { now, seenAt }), subscribe(apply)
 // returning an unsubscribe, refresh(), status(), marks: Set of PR numbers }.
-export async function choosePr(repo, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now(), watch = null, onPick } = {}) {
+// `settings` (a line such as "Provider: Copilot · Model: …") is shown above
+// the keys, and `c` returns OPEN_SETTINGS.
+export async function choosePr(repo, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now(), watch = null, onPick, settings } = {}) {
   let full = false;
   const [owner, name] = repo.split('/');
   // Read the last look before listing: New and Updated mean "since then".
@@ -432,7 +440,9 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
     // Enter decides follow-up or full review itself; f always runs a full one.
     f: (index) => (view.map[index] ? (full = true, { choose: true }) : undefined),
     ...(watch ? { r: () => { watch.refresh(); return undefined; } } : {}),
+    ...(settings ? { c: () => ({ exit: OPEN_SETTINGS }) } : {}),
   };
+  const status = settings ? () => [settings, watch?.status()].filter(Boolean).join(' · ') : watch?.status;
   const control = {};
   // A background refresh: keep the highlighted PR highlighted.
   const unsubscribe = watch?.subscribe((next) => {
@@ -445,9 +455,10 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
   };
   const first = build(null);
   const picked = await pickFromList(first.title, first.rows, {
-    input, output, initial: first.index, actions, control, onMove: watch ? onMove : undefined, status: watch?.status,
-    hint: `Enter review or summary · f full review · s skip until it changes · a show skipped${watch ? ' · r refresh' : ''} · q ${watch ? 'quit' : 'cancel'}`,
+    input, output, initial: first.index, actions, control, onMove: watch ? onMove : undefined, status,
+    hint: `Enter review or summary · f full review · s skip until it changes · a show skipped${watch ? ' · r refresh' : ''}${settings ? ' · c settings' : ''} · q ${watch ? 'quit' : 'cancel'}`,
   }).finally(() => unsubscribe?.());
+  if (picked === OPEN_SETTINGS) return OPEN_SETTINGS;
   if (picked === null || !view.map[picked]) {
     output.write(watch ? 'Watch stopped.\n' : 'Nothing selected.\n');
     return null;

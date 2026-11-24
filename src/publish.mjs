@@ -4,7 +4,7 @@ import { checkDigest } from './adapters.mjs';
 import { costLines, costTotal, editText, renderDigest, summarizeFindings } from './confirm.mjs';
 import { pickFromList } from './select.mjs';
 import { isLive, runSteps } from './steps.mjs';
-import { palette, plainReporter } from './ui.mjs';
+import { palette, plainReporter, PROVIDER_NAMES } from './ui.mjs';
 import { alignVerdict, verdictFor, verdictFromText } from './verdict.mjs';
 
 // After a run every file is saved. This step shows the result and lets the
@@ -47,9 +47,10 @@ export function reviewBody(digest, head, previous = null) {
 }
 
 // What was reviewed, and how, shown once at the top of the decision screen.
-export function runHeader({ pr, title, head, model, checkModel, usage }, c = palette(false)) {
+export function runHeader({ pr, title, head, provider, model, checkModel, usage }, c = palette(false)) {
   const ref = `${pr.owner}/${pr.repo}#${pr.number}`;
-  const models = model ? `${model}${checkModel && checkModel !== model ? ` · check: ${checkModel}` : ''}` : null;
+  const via = provider ? ` ${c.dim(`(${PROVIDER_NAMES[provider] ?? provider})`)}` : '';
+  const models = model ? `${model}${checkModel && checkModel !== model ? ` · check: ${checkModel}` : ''}${via}` : null;
   const cost = costTotal(usage);
   return [
     c.bold(`${ref}${title ? `  ${title}` : ''}`),

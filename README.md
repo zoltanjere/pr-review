@@ -1,94 +1,79 @@
 # pr-review
 
-A cheap, verified second review for GitHub pull requests, next to Copilot's own PR review.
+A cheap, verified second review for GitHub pull requests.
 
-Two AI reviewers read the PR independently, and a verify step checks every finding against the code. You get a short PR comment of at most 250 words that you can keep or post. It runs locally through the GitHub Copilot CLI.
+Two AI reviewers read the PR, and a verify step checks every finding against the code. You get a short comment that you can keep or post. Nothing is posted to GitHub unless you choose it in the terminal.
 
-**What you can do with it:**
-- **Review a PR:** run `reviewpr <url>` and get a verified comment in a few minutes.
-- **Pick what needs you:** run `reviewpr` for a list of open PRs, sorted by what needs you most.
-- **Get notified:** with `reviewpr watch --install`, a macOS notification arrives when a PR needs you again, for example when fixes are pushed after your Request changes.
-
-Nothing is posted to GitHub unless you choose it in the terminal.
+- **Review a PR:** `reviewpr <url>` gives you a verified comment in a few minutes.
+- **Pick what needs you:** `reviewpr` lists the open PRs, most urgent first.
+- **Get notified (macOS):** `reviewpr watch --install` tells you when a PR needs you again.
 
 ---
 
 ## Quick start
 
-### 1. Install
+### 1. What you need
 
-You need git, [nvm](https://github.com/nvm-sh/nvm), and the [GitHub CLI](https://cli.github.com/) (`gh`) and [Copilot CLI](https://github.com/github/copilot-cli) (`copilot`), both signed in. Clone this repository **next to** your clone of the repository you review, for example `~/code/pr-review` beside `~/code/widget`.
+- **git** and **[nvm](https://github.com/nvm-sh/nvm)**. The right Node version comes from `.nvmrc`.
+- **The [GitHub CLI](https://cli.github.com/) (`gh`)**, signed in. It reads the PRs.
+- **One model provider**, signed in. It runs the AI reviewers:
+  - **[Copilot CLI](https://github.com/github/copilot-cli) (`copilot`)**, the default. It needs a GitHub Copilot plan.
+  - **or [Claude Code](https://docs.claude.com/en/docs/claude-code/setup) (`claude`)**, which needs a Claude plan. It's macOS only for now.
+- **This repository cloned next to the one you review**, for example `~/code/pr-review` beside `~/code/widget`.
+
+### 2. Install
+
+**macOS:**
 
 ```sh
+brew install gh copilot-cli          # using Claude Code instead? install it from its setup page
+gh auth login
+copilot login                        # or: claude auth login
 cd pr-review
-nvm install                          # the Node version pinned in .nvmrc
-npm ci
-cp config.example.json config.json   # git-ignored; set "model" and "defaultRepository"
-mkdir -p ~/.local/bin && ln -s "$PWD/src/review.mjs" ~/.local/bin/reviewpr   # the reviewpr command
-brew install terminal-notifier       # for notifications you can click
+nvm install && npm ci
+cp config.example.json config.json   # then set "defaultRepository" to the owner/repo you review
+mkdir -p ~/.local/bin && ln -s "$PWD/src/review.mjs" ~/.local/bin/reviewpr
 ```
 
-If `command -v reviewpr` finds nothing, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` and open a new terminal.
+If `reviewpr` isn't found afterwards, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` and open a new terminal.
 
-**On Windows** (reviews and summaries; watch and notifications are macOS only). Use Windows Terminal, and in PowerShell:
+**Windows** (reviews and summaries with Copilot), in PowerShell:
 
 ```powershell
-winget install GitHub.Copilot        # or npm install -g @github/copilot; both work
-nvm use 26                           # nvm-windows: Node 26 must be on PATH, it isn't switched to by itself
+winget install GitHub.cli
+winget install GitHub.Copilot
+gh auth login
+copilot login
+cd pr-review
+nvm use 26                           # nvm-windows
 npm ci
-copy config.example.json config.json
-npm run review -- <PR URL>           # or: node src\review.mjs
+copy config.example.json config.json # then set "defaultRepository"
 ```
 
-- Agents use PowerShell as their shell, with the same read-only git rules.
-- The temporary clone turns on git's long paths by itself, so repositories with deep folders check out.
-- Edit before posting opens `$env:EDITOR`, or Notepad when it isn't set.
-- Saved files get your folder's usual permissions: Windows ignores the private `0600` mode used on macOS.
-- Very large reviews (more than about 20 long findings) can hit Windows' 32,767-character command-line limit in the check step.
+On Windows, type `npm run review --` where the commands below say `reviewpr`, for example `npm run review -- <PR URL>`.
 
-### 2. Use
+### 3. Use
 
 ```sh
-reviewpr https://github.com/acme/widget/pull/42   # review one PR
-reviewpr                                          # pick a PR from defaultRepository, then review or summarise it
-reviewpr watch --install                          # get notified in the background
+reviewpr <PR URL>            # review one PR
+reviewpr                     # pick a PR from defaultRepository, then review or summarise it
+reviewpr settings            # switch between Copilot and Claude Code, or change the model
+reviewpr watch --install     # macOS: get notified when a PR needs you
 ```
 
-### 3. What to expect
-
-**When you review a PR:**
-- **Duration:** it takes a few minutes, and each step shows a spinner, a timer and the live cost. A run uses about 5 Copilot sessions.
-- **At the end** you see the verdict (🔴 Fix before merge, ⚠️ Changes recommended, 💬 Not approved yet or ✅ Ship), the findings and what verify dropped and why.
-- **Your choice:** keep it local (the default), post it as a review, or edit it first. Posting asks you twice, and nothing is ever posted without a terminal.
-- **Your checkouts:** it reviews in a throwaway clone, so your own clones are never touched.
-- **After fixes:** reviewing a PR you requested changes on or commented on again runs a quicker **follow-up review**: it checks only your earlier points and the new commits, and tells the author so. See [Follow-up reviews](#follow-up-reviews).
-
-**After `reviewpr watch --install`:**
-- **Right away:** a background check is installed and runs once. That first check only records the PRs that are already open, so **you see nothing at first. That's expected.**
-- **Every 5 minutes after that,** it checks GitHub. When something changed, a macOS banner appears in the top-right corner:
-  ```
-  ⟳ #61 fixes pushed
-  fix: resume uploads after a dropped connection
-  by octo-dev · 2 new commits · acme/widget
-  ```
-  The first line says what happened, the second is the PR title, the third says who and how much. It plays the default sound, and clicking it opens the PR in your browser. To review it, run `reviewpr` in a terminal.
-- **Reboots and sleep:** it keeps working after a reboot without a terminal open. If the Mac was asleep, it checks when it wakes.
-- **Cost:** none. It only reads GitHub through `gh` and uses no model. It never posts and never starts a review.
-- **Defaults:** every event is on (`all`). Pick fewer in `config.json` (see [Watch](#watch)), then run `reviewpr watch --install` again.
-- **To stop it:** `reviewpr watch --uninstall`.
-
-Prefer a terminal? `reviewpr watch` keeps the PR list open, refreshes it every few minutes, and lets you press Enter to review right there. See [Watch](#watch).
+At the end of a review you see the verdict and the findings. You then keep it local (the default), post it, or edit it first. Your own clones are never touched.
 
 ### 4. If something doesn't work
 
-| Problem | Check |
+When something is missing, the tool says what it is and how to fix it:
+
+| You see | Do this |
 |---|---|
-| Which notifications will I get? | `reviewpr watch --install` sends a test notification and says which mode works: **clickable** (terminal-notifier, clicking opens the PR) or **plain** (osascript, ends with "run reviewpr"; clicking can't open the PR). Plain needs no setup. You get it when terminal-notifier isn't installed, or before macOS allows it. macOS can ask to allow terminal-notifier some time after its first notification attempt, not right away: click **Allow** (and choose **Alerts** to keep banners on screen), then run `reviewpr watch --install` again to confirm clickable mode. |
-| No notification ever appears | Install says `Notifications: not working`. Check Focus or Do Not Disturb (banners still land in Notification Center), and **System Settings → Notifications**. |
-| Banners vanish too fast | Set terminal-notifier's style to **Alerts** in **System Settings → Notifications**. |
-| Is the background check running? | `tail state/watch.log` shows one line per check (`acme/widget: 0 notifications`). `poll failed: …` usually means `gh` isn't signed in: run `gh auth status`. |
+| `… isn't installed, or isn't on your PATH` | Install it as the message says, or switch provider with `reviewpr settings`. |
+| `… isn't signed in` | Run the command it names: `gh auth login`, `copilot login` or `claude auth login`. |
+| `Could not read model configuration …` | Run `cp config.example.json config.json`. |
 | `reviewpr: command not found` | Add `~/.local/bin` to your `PATH` (see Install). |
-| A setting in `config.json` didn't apply to the background check | Run `reviewpr watch --install` again. |
+| No notifications from watch | See [Watch: troubleshooting](#watch-troubleshooting). |
 
 ---
 
@@ -106,6 +91,7 @@ reviewpr watch                 # the picker, kept open, with notifications
 reviewpr watch --install       # check in the background (launchd)
 reviewpr watch --uninstall     # remove the background check
 reviewpr watch --once          # one check by hand (what the background check runs)
+reviewpr settings              # choose the provider (Copilot or Claude Code) and its model
 ```
 
 **Node version:** you don't have to switch your shell to the version in `.nvmrc`. If you start the tool with an older Node, it restarts itself on the pinned one from your nvm folder, and nothing global changes. Run `nvm use` before `npm ci` or `npm test`.
@@ -118,8 +104,12 @@ reviewpr watch --once          # one check by hand (what the background check ru
 
 | Key | Meaning |
 |---|---|
-| `model` (required) | Copilot model for every agent. A run stops if an agent reports a different model. |
-| `checkModel` | Model for verify's check session only. Defaults to `model`. |
+| `provider` | `"copilot"` (the default) or `"claude"`: which CLI runs the agents. See [Settings](#settings). |
+| `model` (required for Copilot) | Copilot model for every agent. A run stops if an agent reports a different model. |
+| `checkModel` | Copilot model for the check, follow-up and summary sessions. Defaults to `model`. |
+| `claude.model` (required for Claude Code) | Claude Code model for every agent, such as `claude-sonnet-5-5`. |
+| `claude.checkModel` | Claude Code model for the check, follow-up and summary sessions. Defaults to `claude.model`. |
+| `notify` | `false` turns off the terminal bell when a review or summary is done. On by default; also in [Settings](#settings). |
 | `azureDevOpsOrg` | `https://dev.azure.com/<org>`, used to fetch `AB#<id>` work items. This needs the [Azure CLI](https://learn.microsoft.com/cli/azure/) with the `azure-devops` extension, and is optional. |
 | `defaultRepository` | `owner/repo` to pick PRs from, and for watch to check. |
 | `watch.events` | Which changes notify you (see [Watch](#watch)). Defaults to `["all"]`. |
@@ -130,7 +120,24 @@ reviewpr watch --once          # one check by hand (what the background check ru
 - **Thorough:** `claude-opus-5.5`, for large or risky PRs.
 - **Cheaper:** `"checkModel": "claude-haiku-5.5"`. Keep the reviewers on Sonnet or better: they do about 75% of the work and find the bugs.
 
-Use model IDs exactly as Copilot's `/model` lists them.
+Use model IDs exactly as Copilot's `/model` lists them. Claude Code names the same models differently (`claude-sonnet-5-5`), which is why each provider keeps its own.
+
+### Settings
+
+`reviewpr settings`, or `c` in the picker, opens a small screen with three rows:
+
+- **Provider:** where the models come from: **Copilot** or **Claude Code**. A CLI that isn't installed (or Claude Code on Windows) is shown but can't be chosen. A provider that isn't signed in can be chosen, with a warning that names the sign-in command. Choosing a provider for the first time sets its model to Sonnet.
+- **Model:** a short list for the current provider (Haiku, Sonnet, Opus), or **Other** to type any ID. The choice sets both `model` and `checkModel` of that provider; the screen says when it replaced a different check model. A separate check model can still be set by hand in `config.json`.
+- **Bell:** on or off (`notify` in `config.json`). See [A review run](#a-review-run).
+
+The picker shows the current setting above its keys: `Provider: Claude Code · Model: claude-sonnet-5-5`, and so does every run. The choice is saved in this project's `config.json` only. Neither CLI's own settings, `gh` or your other projects change.
+
+**Using Claude Code instead of Copilot:**
+1. Install Claude Code from its [setup page](https://docs.claude.com/en/docs/claude-code/setup), and sign in with `claude auth login`.
+2. Run `reviewpr settings`, choose **Provider → Claude Code**, and optionally pick a model.
+3. Review as usual. Every run checks first that `claude` is installed and signed in, and says how to fix it if not. Copilot can stay installed; switch back the same way.
+
+**How Claude Code runs:** each agent is one `claude -p` process signed in with your own Claude login. It runs with your settings, `CLAUDE.md` files, memory, hooks, plugins and MCP servers turned off for that process only. The pipeline skills come from a plugin staged in the temporary workspace, so they load as `prreview:<skill>`, never a built-in or personal skill of the same name. Agents may read the checkout and the workspace, and run read-only commands there. Reads elsewhere, `git -C` and writes are refused. Claude Code keeps a small folder per working directory in `~/.claude/projects`; the one for the temporary checkout is removed after each step. Claude runs show tokens only: a Claude plan has no AI credits. Claude Code isn't supported on Windows yet.
 
 ### PR picker
 
@@ -160,7 +167,7 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
   - **⟳ Fixes pushed:** you requested changes or commented, and the author has pushed since. Enter runs a [follow-up review](#follow-up-reviews). When one isn't possible, the row says so (`full review: history rewritten`, `commit gone`, `no findings` or `hand-written review`).
   - **★ Asked for you:** you're a requested reviewer.
   - **● New since you looked / ↑ Updated since you looked:** opened or updated since you last opened the picker for this repository (on a first visit: the last 24 h). The header says when that was: `last looked 2d ago`.
-  - **↑ Approved, new commits:** you approved, and commits came in after.
+  - **↑ Approved, new commits:** you approved, and commits came in after. Enter reviews only the new commits (see [Follow-up reviews](#follow-up-reviews)), so re-approving after a push that dismissed your approval is quick.
   - **… No new changes since your review:** the author only rebased or merged the base branch in (`rebased only`, `merged main only`), and the PR's own changes are exactly as you reviewed them. Nothing for you to check yet, and watch doesn't notify. The next real change moves it back to Fixes pushed, with no skip needed.
     - It's checked with two read-only calls that compare what the PR changes, then and now, by added and removed lines. Line positions and context are ignored, because a rebase shifts them. If it can't tell (a failed call, 300 or more files), the row stays in Fixes pushed.
   - **Waiting:** the rest. **◌** marks PRs idle for 14 days or more.
@@ -172,7 +179,7 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
   - Details such as `3 new commits` follow the titles, and rows are at most 100 columns wide, so nothing drifts to the far edge of a wide terminal.
 - **Colours:** the icon and the group heading carry the state's colour. Without colour, the icons, ages and labels carry the same information.
 - **Hidden:** other people's drafts and bot PRs.
-- **Keys:** `↑`/`↓` move, Enter picks the PR, `f` starts a full review straight away, and `q` cancels.
+- **Keys:** `↑`/`↓` move, Enter picks the PR, `f` starts a full review straight away, `c` opens [Settings](#settings), and `q` cancels.
   - **After Enter,** a small menu asks what to do: **Review it** (the default, so Enter twice reviews as before, a follow-up where possible), **Summarise it first** (see [PR summary](#pr-summary)), or **Back to the list**.
   - **Other keys:** `s` skips the highlighted PR until its author pushes a new commit, and `a` shows skipped PRs again (press `s` on one to unskip it).
 - **Where this is kept:** skips and the time you last looked live in `state/picker.json` on your machine only, which is git-ignored. Nothing is written to GitHub.
@@ -217,7 +224,47 @@ Watch sends a macOS notification when something you care about changes. It check
 
 Notifications never start a review or post anything; clicking one only opens the PR. Watch's memory lives in `state/watch.json`, which is git-ignored.
 
+#### After `reviewpr watch --install`
+
+For notifications you can click, also run `brew install terminal-notifier`.
+
+- **Right away:** a background check is installed and runs once. That first check only records the PRs that are already open, so **you see nothing at first. That's expected.**
+- **Every 5 minutes after that,** it checks GitHub. When something changed, a macOS banner appears in the top-right corner:
+  ```
+  ⟳ #61 fixes pushed
+  fix: resume uploads after a dropped connection
+  by octo-dev · 2 new commits · acme/widget
+  ```
+  The first line says what happened, the second is the PR title, the third says who and how much. It plays the default sound, and clicking it opens the PR in your browser. To review it, run `reviewpr` in a terminal.
+- **Reboots and sleep:** it keeps working after a reboot without a terminal open. If the Mac was asleep, it checks when it wakes.
+- **Cost:** none. It only reads GitHub through `gh` and uses no model. It never posts and never starts a review.
+- **Defaults:** every event is on (`all`). Pick fewer in `config.json` (see [Watch](#watch)), then run `reviewpr watch --install` again.
+- **To stop it:** `reviewpr watch --uninstall`.
+
+Prefer a terminal? `reviewpr watch` keeps the PR list open, refreshes it every few minutes, and lets you press Enter to review right there. See [Watch](#watch).
+
+#### Watch troubleshooting
+
+| Problem | Check |
+|---|---|
+| Which notifications will I get? | `reviewpr watch --install` sends a test notification and says which mode works: **clickable** (terminal-notifier, clicking opens the PR) or **plain** (osascript, ends with "run reviewpr"; clicking can't open the PR). Plain needs no setup. You get it when terminal-notifier isn't installed, or before macOS allows it. macOS can ask to allow terminal-notifier some time after its first notification attempt, not right away: click **Allow** (and choose **Alerts** to keep banners on screen), then run `reviewpr watch --install` again to confirm clickable mode. |
+| No notification ever appears | Install says `Notifications: not working`. Check Focus or Do Not Disturb (banners still land in Notification Center), and **System Settings → Notifications**. |
+| Banners vanish too fast | Set terminal-notifier's style to **Alerts** in **System Settings → Notifications**. |
+| Is the background check running? | `tail state/watch.log` shows one line per check (`acme/widget: 0 notifications`). `poll failed: …` usually means `gh` isn't signed in: run `gh auth status`. |
+| A setting in `config.json` didn't apply to the background check | Run `reviewpr watch --install` again. |
+
 ### A review run
+
+- **Duration:** a few minutes. Each step shows a spinner, a timer and the live cost. A run uses about 5 agent sessions.
+- **At the end** you see the verdict (🔴 Fix before merge, ⚠️ Changes recommended or ✅ Ship), the findings, and what verify dropped and why.
+- **Your choice:** keep it local (the default), post it as a review, or edit it first. Posting asks you twice, and nothing is ever posted without a terminal.
+- **After fixes:** reviewing a PR again where you requested changes or commented runs a quicker [follow-up review](#follow-up-reviews). It checks only your earlier points and the new commits.
+- **The bell:** when a review or summary is done, or fails, the terminal bell rings once, so you can work elsewhere meanwhile. It rings only in a terminal, and not for runs under 30 seconds or with `--yes`. What you notice depends on your terminal:
+  - **macOS Terminal:** the dock icon bounces, or shows a badge, when the window isn't in front. Turn on Settings → Profiles → Advanced → Bell ("Audible bell" and "Visual bell") if it's quiet.
+  - **iTerm2:** the dock icon bounces and the tab shows a bell. Profiles → Terminal → Notifications can also show a banner.
+  - **VS Code:** set `accessibility.signals.terminalBell` to on.
+  - **Windows Terminal:** the tab shows a bell and the taskbar button flashes.
+  - Turn it off with **Bell** in `reviewpr settings`, or `"notify": false` in `config.json`.
 
 ```
 prepare ── temporary clone at the PR head, diff, PR body, commits, linked issues, AB# work items
@@ -229,7 +276,7 @@ digest  ── verdict line + at most 5 findings, minor items folded
 ```
 
 - **Verify** is the only step that sets priority: *Must fix*, *Should fix* or *Minor*. Every rejected finding is kept with its reason.
-- **The verdict line** is set in code from those priorities, so it can't contradict the findings: 🔴 Fix before merge, ⚠️ Changes recommended, 💬 Not approved yet (open questions only), or ✅ Ship.
+- **The verdict line** is set in code from those priorities, so it can't contradict the findings: 🔴 Fix before merge, ⚠️ Changes recommended, or ✅ Ship. Open questions alone don't hold back ✅ Ship: the line then says "2 questions, none blocking."
 - **`path:line` references** in the comment become GitHub links. They open the line in *Files changed* when it's part of the diff, and otherwise the file at the reviewed commit.
 
 While it runs, each step shows a spinner, a timer, and its live tokens and AI credits:
@@ -248,7 +295,7 @@ What next?
   Edit the digest first
 ```
 
-- **Posting** asks for the review type, with the one matching the verdict preselected: Request changes for 🔴, Comment only for ⚠️ and 💬, Approve for ✅.
+- **Posting** asks for the review type, with the one matching the verdict preselected: Request changes for 🔴, Comment only for ⚠️, Approve for ✅.
 - **Overriding:** if you pick a type that contradicts the verdict, the verdict line is rewritten to match.
 - **New commits or your own PR:** only Comment is offered.
 - **How it posts:** one `gh pr review` as you, with a footer naming the reviewed commit.
@@ -258,7 +305,7 @@ What next?
 
 ### Follow-up reviews
 
-When you review a PR again after your **Request changes** or **Comment**, reviewpr checks what changed instead of reviewing everything again:
+When you review a PR again after your **Request changes**, **Comment** or **Approve**, reviewpr checks what changed instead of reviewing everything again:
 
 ```
 prepare ── your posted review: its findings and the commit it covered
@@ -270,6 +317,7 @@ digest  ── verdict, a re-review notice for the author, still open, new, reso
 ```
 
 - **Before any model runs,** the terminal says which it will be: `Follow-up of your review at abc1234: 2 new commits, 4 findings to check.`, or a full review and why. Ctrl-C still cancels.
+- **After your approval** (also one a push dismissed), only the new commits are scanned: `Follow-up of your approval at abc1234: 2 new commits, only the new code is reviewed.` Points the approval left open, such as questions, are checked too. With nothing new the verdict is `✅ Ship. Nothing new.` and Approve is preselected, so you can approve again. New problems get the usual verdict, under **New since the approval**. A hand-written approval works the same way, without earlier points.
 - **Answers count:** when the author replied instead of changing the code, the check quotes the reply and judges it against the code: accepted (resolved) or disputed (still open).
 - **The comment tells the author what was re-reviewed:**
   ```
@@ -287,7 +335,7 @@ digest  ── verdict, a re-review notice for the author, still open, new, reso
   </details>
   ```
 - **Short by design:** resolved points are one line each (✅ fixed, 💬 answered), with no explanation. Only open points carry a reason. The full evidence for every point is in the saved `…-follow-up.md`.
-- **Verdict:** 🔴 when a Must fix is still open, disputed or new; ⚠️ when a Should fix is open or new; 💬 when only questions are open; ✅ when everything is resolved and nothing new came up.
+- **Verdict:** 🔴 when a Must fix is still open, disputed or new; ⚠️ when a Should fix is open or new; ✅ when everything is resolved and nothing new came up, or when only questions are open ("2 still open, none blocking.").
 - **Cost:** two sessions plus a small verify, instead of two full reviewers plus verify.
 - **Chains:** the posted footer reads `Follow-up at def5678 of the review at abc1234`, so the next follow-up checks only what was still open.
 - **When it runs a full review instead,** and says why in the terminal, on the picker row and to the author under the verdict:
@@ -295,7 +343,6 @@ digest  ── verdict, a re-review notice for the author, still open, new, reso
   | Situation | Why |
   |---|---|
   | `--full`, or `f` in the picker | you asked for one |
-  | your last review was an approval | there's nothing to follow up; new commits get a full look |
   | your last review wasn't posted by reviewpr | its findings can't be read |
   | your last review had no numbered findings | nothing to follow up |
   | a rebase or force-push removed the reviewed commit and changed the PR's code | earlier findings can't be checked line by line |
@@ -360,12 +407,22 @@ Example digest (fictional):
 </details>
 ```
 
+### Windows
+
+Reviews and summaries work in Windows Terminal with Copilot; watch and notifications are macOS only, and so is the Claude Code provider for now. `winget install GitHub.Copilot` or `npm install -g @github/copilot` both work. With nvm-windows, Node 26 must be on `PATH`, because it isn't switched to by itself.
+
+- Agents use PowerShell as their shell, with the same read-only git rules.
+- The temporary clone turns on git's long paths by itself, so repositories with deep folders check out.
+- Edit before posting opens `$env:EDITOR`, or Notepad when it isn't set.
+- Saved files get your folder's usual permissions: Windows ignores the private `0600` mode used on macOS.
+- Very large reviews (more than about 20 long findings) can hit Windows' 32,767-character command-line limit in the check step.
+
 ### Safety and data
 
 - **Agents are read-only.** They run in the temporary clone and can read files and use read-only git, nothing else: no writes, no `gh`, no network. The clone is deleted when the run ends.
 - **The reviewed repository can't steer the review.** Its own agent instructions aren't loaded, and its skills can't replace the pipeline's.
 - **GitHub is only read**, except for the one review you choose to post. Watch and the picker write only to `state/`, which is git-ignored, and `watch --install` writes one launchd file.
-- **Your data goes to the model provider.** Copilot sends what the agents read (code, PR text, work items) to it. Saved reviews may hold sensitive content; they are readable only by you (on Windows, by whoever can read the folder), and `reviews/` is git-ignored. Watch sends nothing anywhere: PR titles appear only in your own notifications.
+- **Your data goes to the model provider.** Copilot or Claude Code sends what the agents read (code, PR text, work items) to its model provider, under the terms of the account it's signed in with. With Claude Code on a personal plan, those are your personal terms, not your employer's: check that they allow it for the code you review. Saved reviews may hold sensitive content; they are readable only by you (on Windows, by whoever can read the folder), and `reviews/` is git-ignored. Watch sends nothing anywhere: PR titles appear only in your own notifications.
 
 ### Development
 

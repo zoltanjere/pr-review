@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ancestry, followUpLine, followUpMode, postedFindings, postedHead, reviewState } from '../src/follow-up.mjs';
+import { ancestry, followUpLine, followUpMode, postedFindings, postedHead, quietMentions, reviewState } from '../src/follow-up.mjs';
 
 const FOOTER = '\n\n---\n<sub>Reviewed at `abc1234` with AI assistance. Each finding was checked against the code.</sub>\n';
 const DIGEST = `**Verdict:** 🔴 Fix before merge. 1 must-fix, 1 should-fix, 1 question.
@@ -261,4 +261,17 @@ test('reviewState: a dismissed review reads back as what its verdict line was po
   assert.equal(reviewState({ state: 'DISMISSED', body: 'LGTM' }), 'DISMISSED');
   assert.equal(reviewState({ state: 'APPROVED', body: `**Verdict:** 🔴 Fix before merge.${FOOTER}` }), 'APPROVED');
   assert.equal(reviewState(null), null);
+});
+
+test('quietMentions: an @user or @org/team outside code becomes code, so posting notifies nobody', () => {
+  assert.equal(quietMentions('Ask @acme/widget-owners and @octo-dev.'), 'Ask `@acme/widget-owners` and `@octo-dev`.');
+  assert.equal(quietMentions('(@octo-dev) first: @lee'), '(`@octo-dev`) first: `@lee`');
+  assert.equal(quietMentions('@lee at the start'), '`@lee` at the start');
+});
+
+test('quietMentions: code, emails, paths and bots are left alone', () => {
+  const kept = 'Already `@acme/owners`, mail a@b.com, see https://example.com/@x, github-actions[bot], foo.@bar';
+  assert.equal(quietMentions(kept), kept);
+  const fenced = '```\n@lee in a fence\n```\nthen @lee';
+  assert.equal(quietMentions(fenced), '```\n@lee in a fence\n```\nthen `@lee`');
 });

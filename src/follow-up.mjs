@@ -307,3 +307,17 @@ export function sameChanges(then, now) {
   for (const [name, value] of a) if (b.get(name) !== value) return false;
   return true;
 }
+
+// --- Mentions -----------------------------------------------------------------
+
+// A review never pings anyone: an @user or @org/team outside code becomes
+// code, which GitHub doesn't notify. Emails and paths are left alone.
+const MENTION = /(^|[^\w`/.@-])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9][A-Za-z0-9_-]*)?)(?![\w-])/g;
+export function quietMentions(text) {
+  let inFence = false;
+  return String(text ?? '').split('\n').map((line) => {
+    if (line.trim().startsWith('```')) { inFence = !inFence; return line; }
+    if (inFence) return line;
+    return line.split(/(`[^`\n]*`)/).map((part, i) => (i % 2 ? part : part.replace(MENTION, '$1`@$2`'))).join('');
+  }).join('\n');
+}

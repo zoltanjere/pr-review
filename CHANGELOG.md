@@ -2,6 +2,10 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.11.3 (2026-11-24)
+
+- **Reviews never ping anyone:** an `@user` or `@org/team` a model writes into a digest is put in backticks before it's saved, so posting it notifies nobody. Code, email addresses and links are left as they are.
+
 ## 0.11.2 (2026-11-24)
 
 - **A dismissed review still counts as yours:** when a push dismisses your approval (or someone dismisses your review), reviewing again says "Full review: your last review was an approval." instead of running as a first review, and a dismissed Request changes gets its follow-up. The picker shows the PR under Approved, new commits or Fixes pushed, and watch notifies about its updates and merge. GitHub reports such a review only as dismissed, so its posted verdict line says what it was.

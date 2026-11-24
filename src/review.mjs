@@ -13,7 +13,7 @@ import { costTotal, printSummary } from './confirm.mjs';
 import { choose, publishInTerminal } from './publish.mjs';
 import { watchCommand } from './watch-run.mjs';
 import { diffStats, formatSummary, renderSummary, SUMMARY_WORD_LIMIT, summaryWords } from './summary.mjs';
-import { followUpDigest, followUpLine, formatFollowUp, statusSummary, withNotice } from './follow-up.mjs';
+import { followUpDigest, followUpLine, formatFollowUp, quietMentions, statusSummary, withNotice } from './follow-up.mjs';
 
 const STAGES = [...REVIEWERS, 'follow-up', 'scan', 'verified', 'digest', 'summary'].join('|');
 
@@ -165,7 +165,7 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
         run: async (ui) => {
           use(ui);
           // A full review that replaced a follow-up says why, to the author.
-          digest = withNotice(await adapters.digest(verified.markdown, verified.findings), plan.notice);
+          digest = quietMentions(withNotice(await adapters.digest(verified.markdown, verified.findings), plan.notice));
           await save('digest', digest);
           return detail(visibleWords(digest), 'review-digest');
         },
@@ -219,10 +219,10 @@ export async function runPipeline(url, { root, adapters, progress, now = new Dat
           // The skill writes only the new findings; the rest comes from code.
           const worth = verified.findings.some((f) => f.status === 'Question' || f.status === 'Confirmed');
           const newBody = worth ? (await adapters.digest(verified.markdown, verified.findings)).replace(/^\s*\*\*Verdict:\*\*[^\n]*\n*/, '') : '';
-          digest = await adapters.linkify(followUpDigest({
+          digest = quietMentions(await adapters.linkify(followUpDigest({
             previous: plan.findings, statuses, newBody, newFindings: verified.findings,
             facts: { old: plan.old, head: plan.head, commits: plan.commits, chained: plan.chained, merged: plan.merged, rebased: plan.rebased },
-          }));
+          })));
           await save('digest', digest);
           return detail(visibleWords(digest), worth ? 'review-digest' : undefined);
         },

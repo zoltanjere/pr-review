@@ -328,11 +328,11 @@ Each entry has three parts:
 - **Decision:** Without a URL, the tool lists the open PRs of `defaultRepository` from one `gh pr list --json number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,createdAt,updatedAt,mergeable` call, and you pick one with the arrow keys (`src/select.mjs`).
   - **Listed:**
     - PRs with no review from you;
-    - PRs whose latest review by you was dismissed;
+    - PRs whose latest review by you was dismissed on the commit it covered;
     - PRs whose latest review by you covered a commit other than the current head;
     - PRs where you were asked to review again, even if you reviewed the current head.
 
-    Any review type counts.
+    Any review type counts. A dismissed review still counts as yours (`reviewState`): GitHub reports it only as DISMISSED, so the verdict line reviewpr posted says what it was (✅ an approval, 🔴 or ⚠️ a Request changes). A push that dismisses your approval therefore shows the PR under Approved, new commits, and watch notifies as after any review. A dismissed review without a verdict line is read like a review that isn't an approval.
   - **Hidden:** other people's drafts and bot PRs.
   - **States and order:** each PR gets one state, first match wins, shown with an icon, a colour and a label, and grouped under a heading in this order:
     1. **⟳ Fixes pushed:** your latest review was Request changes or Comment, and there are commits after it ("3 new commits", aged by the last one). The count comes from one `gh api repos/<repo>/compare/<reviewed>...<head>` call per changed PR, not from `gh pr list --json commits`: asking for every PR's commits exceeded GitHub's 500,000-node query limit on a real repository. If the count fails, the PR is still listed, as "new commits".
@@ -392,7 +392,7 @@ Each entry has three parts:
 
 ### 7.5 Follow-up review after fixes
 - **Decision:** reviewing a PR again after your Request changes or Comment runs a follow-up instead of a full review, when it can (`src/follow-up.mjs`).
-  - **Source:** your latest posted review on GitHub (REST, which gives the full commit and the time): its numbered findings and the commit in its footer. Reviews you didn't post, and minor items inside `<details>`, aren't read.
+  - **Source:** your latest posted review on GitHub (REST, which gives the full commit and the time): its numbered findings and the commit in its footer. Reviews you didn't post, and minor items inside `<details>`, aren't read. A review GitHub dismissed counts as what it was posted as (7.3), so a dismissed approval gets "your last review was an approval", not a first review.
   - **Decided in code before any model runs,** first match wins: `--full` or `f`; your own PR; no review yet; your last review was an approval; a review without the reviewpr footer; a review without numbered findings; a reviewed commit that is no longer an ancestor of the head (GitHub's compare status `diverged`/`behind`, confirmed with `git merge-base --is-ancestor`); a reviewed commit GitHub no longer has. Each fallback has one reason, said in the terminal before the run, on the picker row (from the compare call the row already makes) and to the author under the verdict.
   - **Steps:** one check session (the check model) gives each earlier finding Fixed, Partly fixed, Answered (accepted or disputed) or Still open, from the new-code diff, the current files and the replies since the review. One scan session reviews only the new code, told the earlier findings so it doesn't repeat them; verify checks its findings as usual. The scan is skipped without new code.
   - **Unchanged rebase:** when the reviewed commit is no longer an ancestor but the PR's own changes are the same (the picker's comparison), it's still a follow-up, with no new code to scan; the notice says `(rebased, no changes to the PR's code)`.

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { palette, plainReporter, short } from './ui.mjs';
 import { isLive, runSteps } from './steps.mjs';
 import { isSkipped, loadState, saveState, skipKey } from './picker-state.mjs';
-import { ancestry, followUpMode, sameChanges } from './follow-up.mjs';
+import { ancestry, followUpMode, reviewState, sameChanges } from './follow-up.mjs';
 
 // Which open PRs still need your review, what state each is in, and an
 // arrow-key picker for them. Listing uses read-only gh calls only; no model is
@@ -59,8 +59,9 @@ export function age(ms) {
 }
 
 // The state of one listed PR, first match wins. `mine` is your latest review
-// (null when none or dismissed); `covered` is the commit it covered; `newer`
-// is { count, last } for the commits since then, when known. `seenAt` is when
+// (null when none; a dismissed one has the state it was posted as); `covered`
+// is the commit it covered; `newer` is { count, last } for the commits since
+// then, when known. `seenAt` is when
 // you last opened the picker for this repository: New and Updated then mean
 // "since you looked"; without it (first visit) they mean the last 24 hours.
 // `ageMs` is how long ago the activity in the label happened.
@@ -122,8 +123,8 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
 }
 
 // Keeps the PRs worth reviewing, each with its state: no review from you yet,
-// or your latest review was dismissed, covers an older commit, or you were
-// asked again. Drafts, your own PRs and bot PRs are hidden. When the reviewed
+// or your latest review was dismissed on the commit it covered, covers an
+// older commit, or you were asked again. Drafts, your own PRs and bot PRs are hidden. When the reviewed
 // commit can't be found, the PR is shown: listing too much is safer than
 // hiding one. Sorted by state priority, then by the age shown in the row.
 // `commitsSince(number, covered, head)` counts the commits after your review;
@@ -140,9 +141,11 @@ export async function candidatePrs(prs, viewer, { commitOf = async () => null, c
     if (pr.isDraft) { hidden.draft++; continue; }
     if (isBot(pr.author)) { hidden.bot++; continue; }
     const latest = (pr.latestReviews ?? []).filter((review) => review.author?.login === viewer).at(-1);
-    const mine = latest && latest.state !== 'DISMISSED' ? latest : null;
+    // A dismissed review still counts as yours. Dismissed on the commit it
+    // covered, it stays listed: someone set it aside without new code.
+    const mine = latest ? { ...latest, state: reviewState(latest) } : null;
     const covered = mine ? reviewedHead(mine) ?? (mine.commit?.oid || await commitOf(pr.number)) : null;
-    if (covered && String(pr.headRefOid ?? '').startsWith(covered) && !isRequested(pr, viewer)) { hidden.reviewed++; continue; }
+    if (covered && String(pr.headRefOid ?? '').startsWith(covered) && !isRequested(pr, viewer) && latest.state !== 'DISMISSED') { hidden.reviewed++; continue; }
     const changed = mine && covered && !String(pr.headRefOid ?? '').startsWith(covered);
     // Whatever it returns or throws, a failed count never stops the listing.
     const newer = changed ? await Promise.resolve().then(() => commitsSince(pr.number, covered, pr.headRefOid)).catch(() => null) : null;

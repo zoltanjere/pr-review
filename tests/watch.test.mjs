@@ -73,6 +73,18 @@ test('reviewed-updated covers every review type, and one push gives one notifica
   assert.deepEqual(only.notifications.map((n) => n.events[0]), ['reviewed-updated', 'reviewed-updated', 'reviewed-updated']);
 });
 
+test('a review GitHub dismissed on the push still counts: updates and merges notify as after the review', async () => {
+  const shipped = (head) => ({ ...myReview('APPROVED', head), body: `**Verdict:** ✅ Ship. Only minor items.\n\n---\n<sub>Reviewed at \`${head.slice(0, 7)}\` with AI assistance.</sub>` });
+  const reviewed = [pr(1, { latestReviews: [shipped(OLD)] })];
+  // The push dismisses the approval: GitHub now reports it only as DISMISSED.
+  const pushed = [{ ...reviewed[0], headRefOid: NEW, latestReviews: [{ ...shipped(OLD), state: 'DISMISSED' }] }];
+  const { notifications, memory } = await polls(reviewed, pushed, { events: ['reviewed-updated'] });
+  assert.deepEqual(notifications.map((n) => n.text), ['↑ #1 updated since your approval · by alice · 2 new commits']);
+  const outcomes = { 1: { state: 'MERGED', mergedBy: 'sam', title: 'PR 1', url: 'https://github.com/acme/widget/pull/1' } };
+  const merged = watchEvents({ repo: REPO, scan: await scan([]), memory, events: ['merged-reviewed'], outcomes, now: NOW });
+  assert.deepEqual(merged.notifications.map((n) => n.text), ['✔ #1 merged by sam']);
+});
+
 test('a skipped PR does not notify about pushes until its head changes', async () => {
   const reviewed = [pr(1, { latestReviews: [myReview('CHANGES_REQUESTED')] })];
   const pushed = [{ ...reviewed[0], headRefOid: NEW }];

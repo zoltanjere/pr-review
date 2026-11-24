@@ -51,7 +51,8 @@ function entryFor(pr, viewer, previous) {
     author: pr.author?.login ?? null,
     own,
     reviewable: !own && !pr.isDraft && !isBot(pr.author),
-    reviewed: !own && Boolean(mine && mine.state !== 'DISMISSED'),
+    // A dismissed review is still yours.
+    reviewed: !own && Boolean(mine),
     requested: !own && isRequested(pr, viewer),
     reviews: own ? otherReviews(pr, viewer).map((review) => `${review.author.login}:${review.state}:${review.submittedAt ?? ''}`) : [],
     mergeable,

@@ -2,6 +2,10 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.11.2 (2026-11-24)
+
+- **A dismissed review still counts as yours:** when a push dismisses your approval (or someone dismisses your review), reviewing again says "Full review: your last review was an approval." instead of running as a first review, and a dismissed Request changes gets its follow-up. The picker shows the PR under Approved, new commits or Fixes pushed, and watch notifies about its updates and merge. GitHub reports such a review only as dismissed, so its posted verdict line says what it was.
+
 ## 0.11.1 (2026-11-24)
 
 - **Windows support for reviews and summaries:** an npm-installed `copilot` (`copilot.cmd`) is started through Node without a shell, so prompts pass safely; `az.cmd` runs through the shell only with plain arguments. Agents get the PowerShell tool instead of bash, under the same read-only git rules. The temporary clone allows long paths, Edit falls back to Notepad, and cleanup retries when a file is briefly locked. Nothing changes on macOS. Watch stays macOS only.

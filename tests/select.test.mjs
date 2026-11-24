@@ -44,6 +44,21 @@ test('only PRs that still need my review are listed, by state then by the age sh
   assert.equal(hiddenSummary({ hidden, open }), '11 open; hidden: 3 reviewed, 1 draft, 1 bot');
 });
 
+test('a dismissed review still counts as mine, as what it was posted as', async () => {
+  const dismissed = (verdict, at) => review('DISMISSED', `**Verdict:** ${verdict}\n\n---\n<sub>Reviewed at \`${at}\` with AI assistance.</sub>`);
+  const { prs, hidden } = await candidatePrs([
+    pr(1, { latestReviews: [dismissed('✅ Ship. Only minor items.', '0000000')] }),
+    pr(2, { latestReviews: [dismissed('🔴 Fix before merge. 1 must-fix.\n\n1. 🔴 **Retry resends a stored chunk**\n   `upload.ts:41`', '0000000')] }),
+    pr(3, { latestReviews: [dismissed('✅ Ship. Only minor items.', HEAD.slice(0, 7))] }),
+  ], ME, { now: Date.parse('2026-11-30T10:00:00Z'), commitsSince: async () => ({ count: 2, status: 'ahead', merges: 0 }) });
+  // Pushed after an approval GitHub dismissed: Approved, new commits. After a dismissed change request: Fixes pushed.
+  // Dismissed on the commit it covered: still listed, never hidden as reviewed.
+  assert.deepEqual(prs.map((item) => [item.number, item.state.key, item.state.label]),
+    [[2, 'fixes', '2 new commits'], [1, 'approved', 'approved · 2 new commits'], [3, 'waiting', '']]);
+  assert.equal(prs[0].state.followUp, true);
+  assert.equal(hidden.reviewed, 0);
+});
+
 test('my own PRs are listed for a self-review, drafts too, and my comments never hide them', async () => {
   const mineReviewed = pr(8, { author: { login: ME }, latestReviews: [review('COMMENTED', 'Reviewed at `a7e50c8` with AI assistance.')] });
   const { prs, hidden } = await candidatePrs([mineReviewed, pr(9, { author: { login: ME }, isDraft: true })], ME, { now: Date.parse('2026-11-30T10:00:00Z') });

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ancestry, followUpLine, followUpMode, postedFindings, postedHead } from '../src/follow-up.mjs';
+import { ancestry, followUpLine, followUpMode, postedFindings, postedHead, reviewState } from '../src/follow-up.mjs';
 
 const FOOTER = '\n\n---\n<sub>Reviewed at `abc1234` with AI assistance. Each finding was checked against the code.</sub>\n';
 const DIGEST = `**Verdict:** 🔴 Fix before merge. 1 must-fix, 1 should-fix, 1 question.
@@ -89,7 +89,11 @@ test('followUpMode: each row of the decision table, first match wins', () => {
   assert.equal(mode({ own: true, latest: review('COMMENTED') }).key, 'own');
   assert.equal(mode({ own: true }).line, null);
   assert.equal(mode({}).key, 'first');
-  assert.equal(mode({ latest: review('DISMISSED') }).key, 'first');
+  // A dismissed review still counts, as what it was posted as.
+  const shipped = mode({ latest: review('DISMISSED', `**Verdict:** ✅ Ship. Only minor items.${FOOTER}`) });
+  assert.deepEqual([shipped.mode, shipped.key, shipped.line], ['full', 'approved', 'Full review: your last review was an approval.']);
+  assert.equal(mode({ latest: review('DISMISSED') }).mode, 'follow-up');
+  assert.equal(mode({ latest: review('DISMISSED', 'LGTM') }).key, 'hand-written');
   assert.deepEqual([mode({ latest: review('APPROVED') })].map((m) => [m.mode, m.key, m.short]), [['full', 'approved', null]]);
   const hand = mode({ latest: review('CHANGES_REQUESTED', '1. 🔴 **x**\n   y') });
   assert.deepEqual([hand.key, hand.short], ['hand-written', 'hand-written review']);
@@ -246,4 +250,15 @@ test('followUpMode follows up when the history was rewritten but the changes are
   assert.equal(reReviewNotice({ old: 'a'.repeat(40), commits: 0, rebased: true, total: 3, counts: { fixed: 0, answered: 1, open: 2, added: 0 } }),
     '> 🔁 **Re-review since `aaaaaaa`** (rebased, no changes to the PR\'s code): only the replies to the 3 earlier points were checked.\n> 1 answered, 2 still open.');
   assert.equal(followUpLine({ head: 'abc1234', commits: 0, findings: 3, rebased: true }), 'Follow-up of your review at `abc1234`: rebased, no changes to the PR\'s code, 3 findings to check.');
+});
+
+test('reviewState: a dismissed review reads back as what its verdict line was posted as', () => {
+  const dismissed = (verdict) => reviewState({ state: 'DISMISSED', body: `**Verdict:** ${verdict}${FOOTER}` });
+  assert.equal(dismissed('✅ Ship. Only minor items.'), 'APPROVED');
+  assert.equal(dismissed('✅ Ship. 1 should-fix, none blocking.'), 'APPROVED');
+  assert.equal(dismissed('🔴 Fix before merge. 1 must-fix.'), 'CHANGES_REQUESTED');
+  assert.equal(dismissed('⚠️ Changes recommended. 2 should-fix.'), 'CHANGES_REQUESTED');
+  assert.equal(reviewState({ state: 'DISMISSED', body: 'LGTM' }), 'DISMISSED');
+  assert.equal(reviewState({ state: 'APPROVED', body: `**Verdict:** 🔴 Fix before merge.${FOOTER}` }), 'APPROVED');
+  assert.equal(reviewState(null), null);
 });

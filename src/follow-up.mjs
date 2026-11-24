@@ -4,7 +4,7 @@
 // full review (and why), and writes the follow-up digest. src/adapters.mjs
 // reads GitHub and runs the models; src/review.mjs runs the steps.
 
-import { verdictFor, verdictLine } from './verdict.mjs';
+import { verdictFor, verdictFromText, verdictLine } from './verdict.mjs';
 
 const SEVERITY = { '🔴': 'Must fix', '🟡': 'Should fix', '❓': 'Question' };
 
@@ -69,19 +69,32 @@ export function ancestry(status) {
 
 const at = (sha) => `\`${String(sha ?? '').slice(0, 7)}\``;
 
+// What a review was posted as. GitHub reports a dismissed review only as
+// DISMISSED (a push dismisses an approval when the repository asks for it),
+// but it's still your review, and its body is unchanged. The verdict line
+// reviewpr posted says which it was: ✅ was an approval, 🔴 and ⚠️ a Request
+// changes. A dismissed review without one stays DISMISSED: still yours, read
+// like any review that isn't an approval.
+const POSTED_AS = { ship: 'APPROVED', block: 'CHANGES_REQUESTED', changes: 'CHANGES_REQUESTED', comment: 'COMMENTED' };
+export function reviewState(review) {
+  if (review?.state !== 'DISMISSED') return review?.state ?? null;
+  return POSTED_AS[verdictFromText(review.body)?.level] ?? 'DISMISSED';
+}
+
 // The decision, in code, before any model runs. The first row that applies
 // wins. Each fallback has one reason, said the same way everywhere:
 // `line` in the terminal, `short` on the picker row, `notice` to the author
 // in the digest. A first review (no earlier review of yours) has no reason.
 // - full: --full or `f` in the picker
 // - own: your own PR
-// - latest: your latest review on the PR ({ state, body, commit }), or null
+// - latest: your latest review on the PR ({ state, body, commit }), or null;
+//   a dismissed one counts, as what it was posted as (reviewState)
 // - history: ancestry() of the reviewed commit against the PR head
 export function followUpMode({ full = false, own = false, latest = null, history = 'unknown' }) {
   const fallback = (key, line, short, notice) => ({ mode: 'full', key, line: `Full review: ${line}`, short, notice });
   if (full) return fallback('asked', 'you asked for one.', 'full review', null);
-  if (own || !latest || latest.state === 'DISMISSED') return { mode: 'full', key: own ? 'own' : 'first', line: null, short: null, notice: null };
-  if (latest.state === 'APPROVED') return { mode: 'full', key: 'approved', line: 'Full review: your last review was an approval.', short: null, notice: null };
+  if (own || !latest) return { mode: 'full', key: own ? 'own' : 'first', line: null, short: null, notice: null };
+  if (reviewState(latest) === 'APPROVED') return { mode: 'full', key: 'approved', line: 'Full review: your last review was an approval.', short: null, notice: null };
   const parsed = postedFindings(latest.body);
   const head = latest.commit ?? postedHead(latest.body);
   if (!parsed.fromReviewpr) {

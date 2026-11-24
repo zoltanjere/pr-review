@@ -44,7 +44,8 @@ test('runs all reviews in parallel and saves five distinct outputs', async (t) =
   const files = await readdir(folder);
   assert.equal(files.length, 4);
   const contents = await Promise.all(files.map((file) => readFile(join(folder, file), 'utf8')));
-  assert.equal((await stat(join(folder, files[0]))).mode & 0o077, 0);
+  // Windows has no Unix mode bits.
+  if (process.platform !== 'win32') assert.equal((await stat(join(folder, files[0]))).mode & 0o077, 0);
   assert(contents.some((text) => text.includes('brief verified ponytail-review finding code-review finding')));
   assert.equal(cleaned, true);
 });
@@ -302,7 +303,8 @@ test('the model is reported once at the start of a run', async () => {
   assert.deepEqual(lines, ['[progress] Model: claude-sonnet-5.5 · check: claude-haiku-5.5']);
 });
 
-test('the CLI also starts when run through a symlink, from another folder', async (t) => {
+// Symlinks on Windows need Developer Mode.
+test('the CLI also starts when run through a symlink, from another folder', { skip: process.platform === 'win32' }, async (t) => {
   const { symlink } = await import('node:fs/promises');
   const dir = await mkdtemp(join(tmpdir(), 'cli-link-'));
   t.after(() => rm(dir, { recursive: true, force: true }));

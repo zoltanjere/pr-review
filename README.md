@@ -30,6 +30,22 @@ brew install terminal-notifier       # for notifications you can click
 
 If `command -v reviewpr` finds nothing, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc` and open a new terminal.
 
+**On Windows** (reviews and summaries; watch and notifications are macOS only). Use Windows Terminal, and in PowerShell:
+
+```powershell
+winget install GitHub.Copilot        # or npm install -g @github/copilot; both work
+nvm use 26                           # nvm-windows: Node 26 must be on PATH, it isn't switched to by itself
+npm ci
+copy config.example.json config.json
+npm run review -- <PR URL>           # or: node src\review.mjs
+```
+
+- Agents use PowerShell as their shell, with the same read-only git rules.
+- The temporary clone turns on git's long paths by itself, so repositories with deep folders check out.
+- Edit before posting opens `$env:EDITOR`, or Notepad when it isn't set.
+- Saved files get your folder's usual permissions: Windows ignores the private `0600` mode used on macOS.
+- Very large reviews (more than about 20 long findings) can hit Windows' 32,767-character command-line limit in the check step.
+
 ### 2. Use
 
 ```sh
@@ -349,7 +365,7 @@ Example digest (fictional):
 - **Agents are read-only.** They run in the temporary clone and can read files and use read-only git, nothing else: no writes, no `gh`, no network. The clone is deleted when the run ends.
 - **The reviewed repository can't steer the review.** Its own agent instructions aren't loaded, and its skills can't replace the pipeline's.
 - **GitHub is only read**, except for the one review you choose to post. Watch and the picker write only to `state/`, which is git-ignored, and `watch --install` writes one launchd file.
-- **Your data goes to the model provider.** Copilot sends what the agents read (code, PR text, work items) to it. Saved reviews may hold sensitive content; they are readable only by you, and `reviews/` is git-ignored. Watch sends nothing anywhere: PR titles appear only in your own notifications.
+- **Your data goes to the model provider.** Copilot sends what the agents read (code, PR text, work items) to it. Saved reviews may hold sensitive content; they are readable only by you (on Windows, by whoever can read the folder), and `reviews/` is git-ignored. Watch sends nothing anywhere: PR titles appear only in your own notifications.
 
 ### Development
 

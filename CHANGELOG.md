@@ -2,6 +2,10 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.11.1 (2026-11-24)
+
+- **Windows support for reviews and summaries:** an npm-installed `copilot` (`copilot.cmd`) is started through Node without a shell, so prompts pass safely; `az.cmd` runs through the shell only with plain arguments. Agents get the PowerShell tool instead of bash, under the same read-only git rules. The temporary clone allows long paths, Edit falls back to Notepad, and cleanup retries when a file is briefly locked. Nothing changes on macOS. Watch stays macOS only.
+
 ## 0.11.0 (2026-11-23)
 
 - **Summarise a PR before reviewing it:** after you pick a PR (in `reviewpr` and `reviewpr watch`), a menu offers **Review it** (the default, so Enter twice works as before), **Summarise it first**, or **Back to the list**. The summary is a short, plain description of what the PR does, written by one check-model session from the description and the code: one standalone sentence, a few "What changes" bullets, and "Worth knowing" points such as where the description and the code disagree. It's saved as `<id>-summary.md` and never posted. Afterwards: Review it now, Back to the list, or Done.

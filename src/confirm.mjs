@@ -53,7 +53,7 @@ export function editText(text) {
     const file = join(dir, 'digest.md');
     try {
       await writeFile(file, text, { mode: 0o600 });
-      const editor = process.env.VISUAL || process.env.EDITOR || 'vi';
+      const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === 'win32' ? 'notepad' : 'vi');
       const result = spawnSync(editor, [file], { stdio: 'inherit', shell: /\s/.test(editor) });
       if (result.status !== 0) throw new Error(`${editor} exited with ${result.status ?? result.signal}`);
       return await readFile(file, 'utf8');

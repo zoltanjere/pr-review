@@ -126,6 +126,31 @@ test('prepares pinned PR commits in a temporary clone without modifying the loca
   await assert.rejects(readFile(result.diff), { code: 'ENOENT' });
 });
 
+test('on Windows, agents get the PowerShell tool and the clone allows long paths; elsewhere nothing changes', async (t) => {
+  for (const platform of ['win32', 'darwin']) {
+    const f = await fixture(t);
+    const calls = [];
+    const inner = mockExecute(f, { copilot: (args) => { calls.push(['copilot', args]); return goodAgent(args); } });
+    const execute = (command, args, options) => { if (command !== 'copilot') calls.push([command, args]); return inner(command, args, options); };
+    const adapters = createAdapters({ projectsRoot: f.root, configPath: f.config, execute, progress: () => {}, platform });
+    const result = await adapters.prepare(PR);
+    try {
+      await adapters.review('ponytail-review', result);
+      const clone = calls.find(([command, args]) => command === 'git' && args[0] === 'clone')[1];
+      const agent = calls.find(([command]) => command === 'copilot')[1];
+      if (platform === 'win32') {
+        assert.deepEqual(clone.slice(0, 4), ['clone', '--no-hardlinks', '--config', 'core.longpaths=true']);
+        assert(agent.includes('--available-tools=skill,view,grep,glob,task,powershell'));
+      } else {
+        assert.deepEqual(clone.slice(0, 3), ['clone', '--no-hardlinks', '--no-checkout']);
+        assert(agent.includes('--available-tools=skill,view,grep,glob,task,bash'));
+      }
+    } finally {
+      await result.cleanup();
+    }
+  }
+});
+
 test('failed preparation removes its temporary clone', async (t) => {
   const f = await fixture(t);
   const tempRoot = join(f.root, 'temp');
@@ -182,6 +207,7 @@ test('agent stages invoke the intended skills and keep repository tools read-onl
       assert.equal(await adapters.digest('verified'), '**Verdict:** ✅ Ship. No issues found.');
       for (const args of calls) {
         assert(args.includes('--deny-tool=write'));
+        assert(args.includes(`--available-tools=skill,view,grep,glob,task,${process.platform === 'win32' ? 'powershell' : 'bash'}`));
         assert(args.includes('--deny-tool=shell(git push)'));
         assert(args.includes('--allow-tool=shell(git diff)'));
         assert(!args.some((arg) => /^--allow-tool=shell(?:\(\w+(?::\*)?\))?$/.test(arg)), 'no blanket or whole-program shell allow');

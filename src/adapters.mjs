@@ -11,6 +11,7 @@ import { withVerdict } from './verdict.mjs';
 import { linkify } from './links.mjs';
 import { ancestry, checkStatuses, followUpMode, sameChanges } from './follow-up.mjs';
 import { summaryPrompt } from './summary.mjs';
+import { startCommand } from './platform.mjs';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -122,7 +123,8 @@ export function checkDigest(text) {
 // events, which the pipeline never reads.
 function runCopilot(args, { onLine, ...options } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn('copilot', args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
+    const start = startCommand('copilot', args);
+    const child = spawn(start.command, start.args, { ...options, stdio: ['ignore', 'pipe', 'pipe'] });
     const lines = [];
     let stderr = '';
     createInterface({ input: child.stdout }).on('line', (line) => {
@@ -150,7 +152,8 @@ export async function runCommand(command, args, options = {}) {
   try {
     if (command === 'copilot') return await runCopilot(args, options);
     const { onLine, ...execOptions } = options;
-    const result = await execFileAsync(command, args, { ...execOptions, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+    const start = startCommand(command, args);
+    const result = await execFileAsync(start.command, start.args, { ...execOptions, ...(start.shell && { shell: true }), encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
     return result.stdout;
   } catch (error) {
     // Copilot reports some failures only as a session.error event on stdout.
@@ -571,7 +574,9 @@ export function liveUsage(stateDir, onUpdate, { intervalMs = 1000 } = {}) {
 
 // --- Adapters ----------------------------------------------------------------
 
-export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot = tmpdir(), configPath = join(projectRoot, 'config.json'), execute = runCommand, progress, copilotStateDir = join(homedir(), '.copilot', 'session-state') } = {}) {
+export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot = tmpdir(), configPath = join(projectRoot, 'config.json'), execute = runCommand, progress, copilotStateDir = join(homedir(), '.copilot', 'session-state'), platform = process.platform } = {}) {
+  // Windows: Copilot's shell tool is PowerShell, and deep repos need long paths.
+  const windows = platform === 'win32';
   const reporter = toReporter(progress);
   // Set by a successful prepare(); every agent stage runs against it.
   let session;
@@ -621,7 +626,7 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
     const output = await execute('copilot', [
       '--disable-builtin-mcps',
       '--no-custom-instructions',
-      '--available-tools=skill,view,grep,glob,task,bash',
+      `--available-tools=skill,view,grep,glob,task,${windows ? 'powershell' : 'bash'}`,
       '--add-dir', session.workspace,
       ...SHELL_ALLOW.map((rule) => `--allow-tool=${rule}`),
       ...SHELL_DENY.map((rule) => `--deny-tool=${rule}`),
@@ -765,12 +770,12 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
         throw new Error('GitHub returned invalid PR commit IDs');
       }
       const workspace = await mkdtemp(join(tempRoot, 'pr-review-'));
-      const cleanup = () => rm(workspace, { recursive: true, force: true });
+      const cleanup = () => rm(workspace, { recursive: true, force: true, maxRetries: 5 });
       try {
         const checkout = join(workspace, 'checkout');
         const git = (...args) => execute('git', ['-C', checkout, ...args]);
         await withProgress(reporter, 'cloning temporary checkout', () =>
-          execute('git', ['clone', '--no-hardlinks', '--no-checkout', '--', local.path, checkout]), QUIET);
+          execute('git', ['clone', '--no-hardlinks', ...(windows ? ['--config', 'core.longpaths=true'] : []), '--no-checkout', '--', local.path, checkout]), QUIET);
         await withProgress(reporter, 'fetching base commit', () => git('fetch', '--no-tags', local.remote, base), QUIET);
         await withProgress(reporter, 'fetching pull request head', () =>
           git('fetch', '--no-tags', local.remote, `refs/pull/${pr.number}/head`), QUIET);
@@ -1007,7 +1012,7 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
         await writeFile(file, body, { mode: 0o600 });
         await execute('gh', ['pr', 'review', url, `--${event}`, '--body-file', file]);
       } finally {
-        await rm(dir, { recursive: true, force: true });
+        await rm(dir, { recursive: true, force: true, maxRetries: 5 });
       }
     },
     // The skill writes the body; the verdict line comes from the findings in

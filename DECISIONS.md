@@ -248,16 +248,17 @@ Each entry has three parts:
   | Confirmed findings | Verdict | Recommended review |
   |---|---|---|
   | any Must fix | 🔴 Fix before merge | Request changes |
-  | any Should fix | ⚠️ Changes recommended | Comment only |
-  | only Questions, Minor or none | ✅ Ship (with questions: "2 questions, none blocking.") | Approve |
+  | 4 or more Should fix (`SHIP_SHOULD_FIX_LIMIT` is 3) | ⚠️ Changes recommended | Comment only |
+  | up to 3 Should fix, Questions, Minor or none | ✅ Ship (with open points: "2 should-fix, 1 question, none blocking.") | Approve |
 
   The counts on the line ("4 should-fix, 1 question.") are computed in code too. Minor items are counted only in the `<details>` summary, so the two numbers can't disagree when the digest merges related minor lines; with only minor items the line says "Only minor items." The `<details>` summary is counted in code too: every Minor, plus the Should fix items and Questions that didn't fit the five visible slots (verify's count minus the numbered 🟡 and ❓ entries shown), for example "1 question and 5 minor items". A run once said "2 questions" in the verdict but showed one, because the model's summary counted the folded question as a minor item. When the person approves over open should-fix items, the line becomes "✅ Ship. 1 should-fix, 1 question, none blocking." so the posted comment matches the decision without an edit; choosing Comment only or Request changes drops "none blocking".
 - **Why:**
-  - An earlier rule, "✅ Ship unless there is a Must fix", produced "✅ Ship" above four Should fix items and recommended Approve. The person had to override it by hand.
+  - Up to 3 Should fix items recommend Approve, and the line says they don't block (user decision, 2026-11-25). The authors are trusted to read and fix them, and a Should fix by definition doesn't have to block the merge. Holding the approval back for one or two cost a round trip on PRs that were fine to merge. Questions don't count toward the limit.
+  - The limit stays because an earlier rule, "✅ Ship unless there is a Must fix", produced "✅ Ship" above four Should fix items and recommended Approve. The person had to override it by hand: many Should fix items together can add up to a real concern.
   - With the line written by the model there were two sources of truth; now there is one.
   - Open Questions alone recommend Approve, and the line says they don't block (user decision, 2026-11-24, replacing the morning's "an open question isn't an approval"). A Question is something unclear, not a problem found: it isn't a Must or Should fix. The author sees the questions in the approved comment and answers them, and a question that turns up a real problem stops the merge there. Holding the approval back for them cost a round trip on PRs that were otherwise done: a follow-up whose fixes were all made, with two questions waiting on the code owners, recommended Comment only.
   - The follow-up already reads the replies since the last review: a Question counts as resolved when a reply answers it, so an answered question isn't asked again. A reply that only says the question is still waiting isn't an answer.
-  - Should fix doesn't block a merge, so ⚠️ recommends Comment only. A Haiku run once gave Should fix to a test nit and recommended Request changes on a correct PR. A priority one level too high should cost a comment, not a blocked PR (user decision).
+  - Should fix doesn't block a merge, so ⚠️ (more than 3 of them) recommends Comment only, never Request changes. A Haiku run once gave Should fix to a test nit and recommended Request changes on a correct PR. A priority one level too high should cost a comment, not a blocked PR (user decision).
 - **Don't:**
   - Let the skill write the verdict again.
   - Bring back 🛑 **Blocked** or any other judgment-based tier.
@@ -286,7 +287,7 @@ Each entry has three parts:
   - The terminal then shows verify's decisions and the digest preview, and offers **Keep it local** (the default, and what Enter does), **Post it as a review on the PR**, or **Edit the digest first**. An edit is saved to the digest file.
   - Choosing Post re-reads the PR's live state, then asks for the review type, with the recommendation marked "(recommended)" and preselected:
     - **Request changes** when verify confirmed a Must fix;
-    - **Comment only** when the worst is a Should fix;
+    - **Comment only** when the worst is a Should fix and there are more than 3 of them;
     - otherwise **Approve**.
   - Only **Comment only** is offered when the PR has commits newer than the reviewed head, since an Approve would cover unreviewed code, or when it's the person's own PR, which GitHub doesn't let them approve. Closed and merged PRs can't be posted to.
   - **Own PR:** the person isn't a reviewer there, so the code-decided verdict is kept as a recommendation and marked `**Verdict:** Self-review: ✅ Ship. …`. It is not rewritten to "Not approved yet" as it is for a comment on someone else's PR (`alignVerdict(…, { own: true })`).

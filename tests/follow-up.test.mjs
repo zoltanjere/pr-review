@@ -160,7 +160,7 @@ test('followUpDigest: still open first, numbered; new findings after; resolved f
   const newBody = `### Should fix\n1. 🟡 **The retry counter is never reset**\n   \`upload.ts:95\`\n   Fix: reset it per chunk.\n\n<details><summary>1 minor item</summary>\n\n- \`upload.ts:4\`: unused export.\n</details>`;
   const newFindings = [{ status: 'Confirmed', priority: 'Should fix' }, { status: 'Confirmed', priority: 'Minor' }];
   const digest = followUpDigest({ previous: PREVIOUS, statuses, newBody, newFindings, facts: FACTS });
-  assert.equal(digest, `**Verdict:** ⚠️ Changes recommended. 1 still open, 1 new.
+  assert.equal(digest, `**Verdict:** ✅ Ship. 1 still open, 1 new, none blocking.
 
 > 🔁 **Re-review since \`aaaaaaa\`** (2 new commits): only the 3 earlier points and what the new commits changed were checked.
 > 1 fixed, 1 answered, 1 still open, 1 new.
@@ -187,7 +187,7 @@ test('followUpDigest: still open first, numbered; new findings after; resolved f
 </details>`);
   // The result reads back: the next follow-up finds the open and new findings.
   assert.deepEqual(postedFindings(`${digest}${FOOTER}`).findings.map((f) => f.title), ['Backoff has no upper bound', 'The retry counter is never reset']);
-  assert.equal(verdictFromText(digest).event, 'comment');
+  assert.equal(verdictFromText(digest).event, 'approve');
 });
 
 test('followUpDigest verdict: an open or disputed Must fix requests changes; all resolved approves', () => {
@@ -301,5 +301,8 @@ test('followUpDigest after an approval: only the new commits, no empty tally, it
   assert.equal(followUpDigest({ previous: [], statuses: [], facts }),
     '**Verdict:** ✅ Ship. Nothing new.\n\n> 🔁 **Re-review since the approval at `aaaaaaa`** (2 new commits): only what the new commits changed was checked.');
   const found = followUpDigest({ previous: [], statuses: [], newBody: '### Should fix\n1. 🟡 **Loop never ends**\n   `a.js:3`\n   Fix: cap it.', newFindings: [{ status: 'Confirmed', priority: 'Should fix' }], facts });
-  assert.match(found, /^\*\*Verdict:\*\* ⚠️ Changes recommended\. 1 new\.\n\n> .*\n> 1 new\.\n\n### New since the approval\n1\. 🟡 \*\*Loop never ends\*\*/);
+  assert.match(found, /^\*\*Verdict:\*\* ✅ Ship\. 1 new, none blocking\.\n\n> .*\n> 1 new\.\n\n### New since the approval\n1\. 🟡 \*\*Loop never ends\*\*/);
+  // More than 3 open should-fix items together recommend a comment.
+  const four = [1, 2, 3, 4].map(() => ({ status: 'Confirmed', priority: 'Should fix' }));
+  assert.match(followUpDigest({ previous: [], statuses: [], newBody: '', newFindings: four, facts }), /^\*\*Verdict:\*\* ⚠️ Changes recommended\. 4 new\./);
 });

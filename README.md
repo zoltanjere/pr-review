@@ -304,7 +304,7 @@ digest  ── verdict line + at most 5 findings, minor items folded
 ```
 
 - **Verify** is the only step that sets priority: *Must fix*, *Should fix* or *Minor*. Every rejected finding is kept with its reason.
-- **The verdict line** is set in code from those priorities, so it can't contradict the findings: 🔴 Fix before merge, ⚠️ Changes recommended, or ✅ Ship. Open questions alone don't hold back ✅ Ship: the line then says "2 questions, none blocking."
+- **The verdict line** is set in code from those priorities, so it can't contradict the findings: 🔴 Fix before merge for any Must fix, ⚠️ Changes recommended for 4 or more Should fix, otherwise ✅ Ship. Up to 3 Should fix items and open questions don't hold back ✅ Ship: the line then says "2 should-fix, 1 question, none blocking."
 - **`path:line` references** in the comment become GitHub links. They open the line in *Files changed* when it's part of the diff, and otherwise the file at the reviewed commit.
 
 While it runs, each step shows a spinner, a timer, and its live tokens and AI credits:
@@ -349,7 +349,7 @@ digest  ── verdict, a re-review notice for the author, still open, new, reso
 - **Answers count:** when the author replied instead of changing the code, the check quotes the reply and judges it against the code: accepted (resolved) or disputed (still open).
 - **The comment tells the author what was re-reviewed:**
   ```
-  **Verdict:** ⚠️ Changes recommended. 1 still open, 1 new.
+  **Verdict:** ✅ Ship. 1 still open, 1 new, none blocking.
 
   > 🔁 **Re-review since `abc1234`** (2 new commits): only the 4 earlier points and what the new commits changed were checked.
   > 2 fixed, 1 answered, 1 still open, 1 new.
@@ -363,7 +363,7 @@ digest  ── verdict, a re-review notice for the author, still open, new, reso
   </details>
   ```
 - **Short by design:** resolved points are one line each (✅ fixed, 💬 answered), with no explanation. Only open points carry a reason. The full evidence for every point is in the saved `…-follow-up.md`.
-- **Verdict:** 🔴 when a Must fix is still open, disputed or new; ⚠️ when a Should fix is open or new; ✅ when everything is resolved and nothing new came up, or when only questions are open ("2 still open, none blocking.").
+- **Verdict:** 🔴 when a Must fix is still open, disputed or new; ⚠️ when 4 or more Should fix are open or new; otherwise ✅, which says "none blocking" when points are still open ("2 still open, none blocking.").
 - **Cost:** two sessions plus a small verify, instead of two full reviewers plus verify.
 - **Chains:** the posted footer reads `Follow-up at def5678 of the review at abc1234`, so the next follow-up checks only what was still open.
 - **When it runs a full review instead,** and says why in the terminal, on the picker row and to the author under the verdict:

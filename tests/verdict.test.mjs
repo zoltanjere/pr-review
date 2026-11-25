@@ -4,8 +4,13 @@ import { alignVerdict, verdictFor, verdictFromText, withVerdict } from '../src/v
 
 const f = (status, priority = '-') => ({ title: 't', status, priority });
 
-test('the verdict is decided by the highest confirmed priority; open questions alone ship and don\'t block', () => {
+test('the verdict is decided by the highest confirmed priority; up to 3 should-fix and open questions ship and don\'t block', () => {
   assert.equal(verdictFor([f('Confirmed', 'Must fix'), f('Confirmed', 'Should fix')]).line, '**Verdict:** 🔴 Fix before merge. 1 must-fix, 1 should-fix.');
+  const three = [1, 2, 3].map(() => f('Confirmed', 'Should fix'));
+  assert.deepEqual([verdictFor(three).line, verdictFor(three).event], ['**Verdict:** ✅ Ship. 3 should-fix, none blocking.', 'approve']);
+  // Questions don't count toward the limit.
+  assert.equal(verdictFor([...three, f('Question'), f('Question')]).line, '**Verdict:** ✅ Ship. 3 should-fix, 2 questions, none blocking.');
+  assert.equal(verdictFor([f('Confirmed', 'Should fix'), f('Confirmed', 'Minor')]).line, '**Verdict:** ✅ Ship. 1 should-fix, none blocking.');
   const four = [1, 2, 3, 4].map(() => f('Confirmed', 'Should fix'));
   assert.deepEqual(
     [verdictFor([...four, f('Question'), f('Confirmed', 'Minor'), f('Rejected')]).line, verdictFor(four).event],

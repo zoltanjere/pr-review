@@ -468,7 +468,7 @@ test('the verdict line comes from the findings, replacing any the model wrote', 
   };
   const { adapters } = await prepared(t, { copilot });
   const digest = await adapters.digest('verified', [{ title: 'Problem', status: 'Confirmed', priority: 'Should fix' }]);
-  assert.equal(digest, '**Verdict:** ⚠️ Changes recommended. 1 should-fix.\n\n### Should fix\n1. 🟡 **Problem**');
+  assert.equal(digest, '**Verdict:** ✅ Ship. 1 should-fix, none blocking.\n\n### Should fix\n1. 🟡 **Problem**');
   assert.match(prompts[0], /Do not write a verdict line/);
 });
 

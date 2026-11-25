@@ -228,7 +228,7 @@ export function followUpDigest({ previous, statuses, newBody = '', newFindings =
     ...newFindings,
   ];
   const level = verdictFor(all).level;
-  // Shipping with points open means only questions are left: say they don't block.
+  // Shipping with points open means no Must fix and few Should fix: say they don't block.
   const rest = !previous.length && !added.length ? 'Nothing new.'
     : !open.length && !added.length
     ? `${previous.length === 1 ? 'The earlier point is' : `All ${previous.length} earlier points`} resolved${facts.commits ? ', nothing new' : ''}.`

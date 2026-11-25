@@ -3,12 +3,16 @@
 
 const LEVELS = {
   block: { icon: '🔴', label: 'Fix before merge', event: 'request-changes' },
-  // Should fix doesn't block, so it recommends a comment: a priority one level
-  // too high then costs a non-blocking comment, not a blocked PR.
+  // More should-fix items than SHIP_SHOULD_FIX_LIMIT: none blocks on its own,
+  // but together they can add up, so it recommends a comment, not a block.
   changes: { icon: '⚠️', label: 'Changes recommended', event: 'comment' },
   ship: { icon: '✅', label: 'Ship', event: 'approve' },
   comment: { icon: '💬', label: 'Not approved yet', event: 'comment' },
 };
+
+// Up to this many Should fix items still ship: the author reads and fixes them
+// after the approval.
+export const SHIP_SHOULD_FIX_LIMIT = 3;
 
 const VERDICT_LINE = /^\s*\*\*Verdict:\*\*[^\n]*(?:\n|$)/;
 
@@ -30,14 +34,14 @@ const lineFor = (level, rest) => `**Verdict:** ${LEVELS[level].icon} ${LEVELS[le
 export const verdictLine = lineFor;
 
 export function verdictFor(findings = []) {
-  const has = (priority) => findings.some((item) => item.status === 'Confirmed' && item.priority === priority);
-  // A Question is something unclear, not a problem found: with nothing else
-  // open the PR ships, and the line says the questions don't block. The
-  // author still sees and answers them.
-  const asks = findings.some((item) => item.status === 'Question');
-  const level = has('Must fix') ? 'block' : has('Should fix') ? 'changes' : 'ship';
+  const count = (priority) => findings.filter((item) => item.status === 'Confirmed' && item.priority === priority).length;
+  // A Question is something unclear, not a problem found, and a few Should fix
+  // items are trusted to the author: the PR ships, and the line says they
+  // don't block. The author still sees them and answers or fixes them.
+  const open = count('Should fix') || findings.some((item) => item.status === 'Question');
+  const level = count('Must fix') ? 'block' : count('Should fix') > SHIP_SHOULD_FIX_LIMIT ? 'changes' : 'ship';
   const rest = counts(findings);
-  return { level, ...LEVELS[level], line: lineFor(level, level === 'ship' && asks ? rest.replace(/\.$/, ', none blocking.') : rest) };
+  return { level, ...LEVELS[level], line: lineFor(level, level === 'ship' && open ? rest.replace(/\.$/, ', none blocking.') : rest) };
 }
 
 // Reads the level back from a digest's verdict line, which a person may have edited.

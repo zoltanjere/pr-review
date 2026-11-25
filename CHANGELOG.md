@@ -2,6 +2,10 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.16.0 (2026-11-25)
+
+- **Up to 3 Should fix items recommend Approve:** the verdict says "✅ Ship. 2 should-fix, none blocking." and Approve is preselected, so the author reads and fixes them after the approval. 4 or more still give ⚠️ Changes recommended and Comment only, since many together can add up. A Must fix still gives 🔴 and Request changes. Follow-ups count open and new Should fix items the same way.
+
 ## 0.15.0 (2026-11-25)
 
 - **Aliases for repositories:** give each repository a short name for the PR list's repository column, in **Repositories** in `reviewpr settings` (or `c` in the picker), or as `{ "repo": "acme/widget-fe", "alias": "fe" }` in `repositories`. Repositories whose names differ only at the end, such as `…-fe` and `…-be`, no longer look the same once cut. An alias is 1 to 14 characters, shown as typed, and refused when another repository already uses it. Watch's open app labels its notices with the alias too; desktop notifications and the log keep the full `owner/repo`.

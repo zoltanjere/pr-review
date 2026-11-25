@@ -11,6 +11,7 @@ import { withVerdict } from './verdict.mjs';
 import { linkify } from './links.mjs';
 import { ancestry, checkStatuses, followUpMode, sameChanges } from './follow-up.mjs';
 import { summaryPrompt } from './summary.mjs';
+import { aliasProblem, parseRepo } from './select.mjs';
 import { startCommand } from './platform.mjs';
 import { checkProvider, setupHint } from './setup.mjs';
 import { CLAUDE_WORDING, checkClaudeModel, claudeArgs, claudeEnv, claudeLive, claudeProjectsDir, claudeResponse, claudeSkillMissing, claudeSubagents, claudeUsage, removeProjectFolder, stagePlugin } from './claude.mjs';
@@ -92,17 +93,18 @@ function dropEmptyGroups(text) {
 // github.com pull/issue URL), so verify can see whether a condition the body
 // sets ("stays a draft until #163 merges") has been met. Skips this PR itself,
 // issues it closes (fetched in full already) and AB# work items. At most 5.
+// A bare #N is marked `bare`: it may be another tracker's number ("Feature #123456").
 export const REFERENCE_LIMIT = 5;
 export function prReferences(text, pr, { exclude = [] } = {}) {
   const found = new Map();
-  const add = (owner, repo, number) => {
+  const add = (owner, repo, number, bare = false) => {
     const n = Number(number);
     // A name made only of dots would turn the API path into ../ (GitHub names never are).
     if ([owner, repo].some((name) => /^\.+$/.test(name))) return;
     const same = owner.toLowerCase() === pr.owner.toLowerCase() && repo.toLowerCase() === pr.repo.toLowerCase();
     if (!Number.isSafeInteger(n) || n < 1 || (same && (n === Number(pr.number) || exclude.map(Number).includes(n)))) return;
     const key = `${owner}/${repo}#${n}`.toLowerCase();
-    if (!found.has(key)) found.set(key, { owner, repo, number: n });
+    if (!found.has(key)) found.set(key, { owner, repo, number: n, ...(bare && { bare }) });
   };
   const source = String(text ?? '');
   for (const m of source.matchAll(/https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:pull|issues)\/(\d+)/g)) add(m[1], m[2], m[3]);
@@ -110,7 +112,7 @@ export function prReferences(text, pr, { exclude = [] } = {}) {
   for (const m of bare.matchAll(/(?<![\w/.-])([\w.-]+)\/([\w.-]+)#(\d+)\b/g)) add(m[1], m[2], m[3]);
   // A bare #N after an explicit owner/repo#N is usually shorthand for it.
   const explicit = new Set([...found.values()].map((ref) => ref.number));
-  for (const m of bare.matchAll(/(?<![\w/#.-])#(\d+)\b/g)) if (!explicit.has(Number(m[1]))) add(pr.owner, pr.repo, m[1]);
+  for (const m of bare.matchAll(/(?<![\w/#.-])#(\d+)\b/g)) if (!explicit.has(Number(m[1]))) add(pr.owner, pr.repo, m[1], true);
   return [...found.values()].slice(0, REFERENCE_LIMIT);
 }
 
@@ -256,21 +258,33 @@ export async function readConfig(configPath = join(projectRoot, 'config.json')) 
   if (config.azureDevOpsOrg !== undefined && !/^https:\/\/dev\.azure\.com\/[^/\s]+\/?$/.test(config.azureDevOpsOrg)) {
     throw new Error(`azureDevOpsOrg in ${configPath} must look like https://dev.azure.com/<organization>`);
   }
-  // "repositories": ["owner/repo", …]; the older "defaultRepository" is a list of one.
+  // "repositories": ["owner/repo" or { "repo": "owner/repo", "alias": "fe" }, …];
+  // the older "defaultRepository" is a list of one. Read as a plain list of
+  // owner/repo (duplicates dropped, the first kept) plus repositoryAliases.
   if (config.repositories !== undefined && config.defaultRepository !== undefined) {
     throw new Error(`Set either repositories or defaultRepository in ${configPath}, not both: keep "repositories": [...]`);
   }
   const key = config.repositories !== undefined ? 'repositories' : 'defaultRepository';
   const listed = config.repositories ?? (config.defaultRepository === undefined ? [] : [config.defaultRepository]);
   if (!Array.isArray(listed)) throw new Error(`repositories in ${configPath} must be a list such as ["owner/repo"]`);
-  config.repositories = [...new Set(listed.map((entry) => {
-    // "owner/repo", or its github.com URL, using the same name rules as PR URLs.
-    const match = /^(?:https:\/\/github\.com\/)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(String(entry));
-    if (!match || ['.', '..'].includes(match[1]) || ['.', '..'].includes(match[2])) {
-      throw new Error(`${key} in ${configPath} must look like owner/repo (got ${JSON.stringify(entry)})`);
-    }
-    return `${match[1]}/${match[2]}`;
-  }))];
+  const repositories = [];
+  const aliases = {};
+  for (const entry of listed) {
+    const isObject = entry !== null && typeof entry === 'object' && !Array.isArray(entry);
+    const extra = isObject ? Object.keys(entry).filter((name) => !['repo', 'alias'].includes(name)) : [];
+    if (extra.length) throw new Error(`repositories in ${configPath}: unknown key ${extra.map((name) => `"${name}"`).join(', ')} in ${JSON.stringify(entry)}; an entry has "repo" and an optional "alias"`);
+    const repo = parseRepo(isObject ? entry.repo : entry);
+    if (!repo) throw new Error(`${key} in ${configPath} must look like owner/repo (got ${JSON.stringify(isObject ? entry.repo : entry)})`);
+    if (repositories.includes(repo)) continue;
+    repositories.push(repo);
+    if (isObject && entry.alias !== undefined) aliases[repo] = entry.alias;
+  }
+  for (const [repo, alias] of Object.entries(aliases)) {
+    const problem = typeof alias === 'string' ? aliasProblem(alias, repo, repositories, aliases) : 'an alias must be text';
+    if (problem) throw new Error(`repositories in ${configPath}: alias ${JSON.stringify(alias)} for ${repo}: ${problem}`);
+  }
+  config.repositories = repositories;
+  config.repositoryAliases = aliases;
   delete config.defaultRepository;
   // The rest of the pipeline reads model and checkModel, whichever the provider.
   if (provider === 'claude') return { ...config, provider, model: config.claude.model, checkModel: config.claude.checkModel };
@@ -750,16 +764,19 @@ export function createAdapters({ projectsRoot = dirname(projectRoot), tempRoot =
   }
 
   // State of each referenced PR or issue: one read-only REST call each. A
-  // failure is recorded, never fatal.
+  // failure is recorded, never fatal. A bare #N that GitHub doesn't know is
+  // another tracker's number, so it's dropped without a warning.
   async function fetchReferences(references) {
     const results = [];
     for (const ref of references) {
       const name = `${ref.owner}/${ref.repo}#${ref.number}`;
       try {
-        const data = JSON.parse(await withProgress(reporter, `checking referenced ${name}`, () =>
+        const raw = await withProgress(reporter, `checking referenced ${name}`, () =>
           execute('gh', ['api', `repos/${ref.owner}/${ref.repo}/issues/${ref.number}`, '--jq',
-            '{title, state, url: .html_url, pullRequest: (.pull_request != null), draft: (.draft // false), mergedAt: .pull_request.merged_at, closedAt: .closed_at}']), QUIET));
-        results.push({ reference: name, ...data });
+            '{title, state, url: .html_url, pullRequest: (.pull_request != null), draft: (.draft // false), mergedAt: .pull_request.merged_at, closedAt: .closed_at}'])
+            .catch((error) => { if (ref.bare && /HTTP 404/.test(error.message)) return null; throw error; }), QUIET);
+        if (raw === null) continue;
+        results.push({ reference: name, ...JSON.parse(raw) });
       } catch (error) {
         results.push({ reference: name, error: error.message });
       }

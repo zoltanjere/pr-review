@@ -181,20 +181,41 @@ export function hiddenSummary({ hidden, open }) {
 // the titles, not the terminal's right edge, and rows are at most MAX_WIDTH
 // wide. Skipped rows are dimmed whole.
 const MAX_WIDTH = 100;
+// "owner/repo" from "owner/repo" or its github.com URL, using the same name
+// rules as PR URLs; null when it isn't one.
+export function parseRepo(entry) {
+  const match = /^(?:https:\/\/github\.com\/)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(String(entry));
+  if (!match || ['.', '..'].includes(match[1]) || ['.', '..'].includes(match[2])) return null;
+  return `${match[1]}/${match[2]}`;
+}
+
 // With several repositories, each row names its repository in a column after
-// the icon: the repository's name, owner/repo when two names are the same,
-// cut to REPO_LABEL_MAX characters so a long name can't push the titles right.
-// Labels still equal after the cut keep the end of owner/repo instead.
+// the icon: its alias when one is set (`aliases`: { "owner/repo": "fe" }),
+// shown as typed; otherwise the repository's name, owner/repo when two names
+// are the same, cut to REPO_LABEL_MAX characters so a long name can't push the
+// titles right. Labels still equal after the cut keep the end of owner/repo.
 // One repository: null, and the rows look as they always did.
 export const REPO_LABEL_MAX = 14;
-export function repoLabels(repos) {
+export function repoLabels(repos, aliases = {}) {
   if (repos.length < 2) return null;
   const name = (repo) => repo.split('/')[1];
-  const clash = (repo) => repos.some((other) => other !== repo && name(other).toLowerCase() === name(repo).toLowerCase());
-  const labels = Object.fromEntries(repos.map((repo) => [repo, short(clash(repo) ? repo : name(repo), REPO_LABEL_MAX)]));
+  const plain = repos.filter((repo) => !aliases[repo]);
+  const clash = (repo) => plain.some((other) => other !== repo && name(other).toLowerCase() === name(repo).toLowerCase());
+  const labels = Object.fromEntries(plain.map((repo) => [repo, short(clash(repo) ? repo : name(repo), REPO_LABEL_MAX)]));
   const taken = (label) => Object.values(labels).filter((other) => other === label).length > 1;
   const tail = (repo) => (repo.length > REPO_LABEL_MAX ? `…${repo.slice(-(REPO_LABEL_MAX - 1))}` : repo);
-  return Object.fromEntries(repos.map((repo) => [repo, taken(labels[repo]) ? tail(repo) : labels[repo]]));
+  return Object.fromEntries(repos.map((repo) => [repo, aliases[repo] ?? (taken(labels[repo]) ? tail(repo) : labels[repo])]));
+}
+
+// Why `alias` can't name `repo`, or null when it can: 1 to REPO_LABEL_MAX
+// characters from letters, digits and . _ / -, and not another repository's
+// alias or name (case ignored), so every row stays tellable apart.
+export function aliasProblem(alias, repo, repos, aliases = {}) {
+  if (!alias || alias.length > REPO_LABEL_MAX) return `an alias is 1 to ${REPO_LABEL_MAX} characters`;
+  if (!/^[A-Za-z0-9._/-]+$/.test(alias)) return 'an alias may use letters, digits and . _ / - only';
+  const same = (text) => String(text ?? '').toLowerCase() === alias.toLowerCase();
+  const other = repos.find((item) => item !== repo && (same(aliases[item]) || same(item.split('/')[1]) || same(item)));
+  return other ? `"${alias}" is already used by ${other}` : null;
 }
 
 export function formatRows(prs, width = 100, { color = false, labels = null } = {}) {
@@ -388,8 +409,8 @@ export async function scanRepo(repo, adapters, { now = Date.now(), seenAt = null
 // unreadable, since its PRs couldn't be reviewed. A repository that can't be
 // read is reported in `failed` and the others still list; when none can be
 // read, the first error is thrown. Read-only.
-export async function scanRepos(repos, adapters, { now = Date.now(), seenAt = null, status = () => {}, clone = false } = {}) {
-  const labels = repoLabels(repos);
+export async function scanRepos(repos, adapters, { now = Date.now(), seenAt = null, status = () => {}, clone = false, aliases = {} } = {}) {
+  const labels = repoLabels(repos, aliases);
   const results = await Promise.all(repos.map(async (repo) => {
     const say = labels ? (text) => status(`${labels[repo]}: ${text}`) : status;
     try {
@@ -434,11 +455,12 @@ export const OPEN_SETTINGS = Symbol('settings');
 // scanRepos result, subscribe(apply) returning an unsubscribe, refresh(),
 // status(), marks: Set of "owner/repo#number" }.
 // `settings` (a line such as "Provider: Copilot · Model: …") is shown above
-// the keys, and `c` returns OPEN_SETTINGS.
-export async function choosePr(repoOrRepos, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now(), watch = null, onPick, settings } = {}) {
+// the keys, and `c` returns OPEN_SETTINGS. `aliases` names repositories in
+// the column (repoLabels).
+export async function choosePr(repoOrRepos, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now(), watch = null, onPick, settings, aliases = {} } = {}) {
   let full = false;
   const repos = [].concat(repoOrRepos);
-  const labels = repoLabels(repos);
+  const labels = repoLabels(repos, aliases);
   const where = repos.length === 1 ? repos[0] : `${repos.length} repositories`;
   // Read the last looks before listing: New and Updated mean "since then".
   const state = loadState(statePath);
@@ -451,7 +473,7 @@ export async function choosePr(repoOrRepos, adapters, { input, output = process.
     title: `Loading open PRs of ${where}`,
     run: async (ui) => {
       const status = (text) => ui.status(text);
-      scan = await (watch ? watch.scanner(status, { now, seenAt }) : scanRepos(repos, adapters, { now, seenAt, status, clone: true }));
+      scan = await (watch ? watch.scanner(status, { now, seenAt }) : scanRepos(repos, adapters, { now, seenAt, status, clone: true, aliases }));
       return `${scan.list.prs.length} to review`;
     },
   }], { live, reporter });

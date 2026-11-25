@@ -747,6 +747,21 @@ test('preparation records the draft state and the state of referenced PRs, and s
   assert.match(context.references[1].error, /not found/);
 });
 
+test('a bare #N that GitHub returns 404 for is dropped quietly; an explicit reference keeps its 404', async (t) => {
+  const looked = [];
+  const { prepared: result } = await prepared(t, {
+    metadata: { title: 'Fixture', body: "Feature #123456's old summary stays. Needs acme/tools#404.", isDraft: false },
+    reference: (args) => {
+      looked.push(args[1]);
+      throw new Error('gh failed: gh: Not Found (HTTP 404); exit code 1');
+    },
+  });
+  const context = JSON.parse(await readFile(result.context, 'utf8'));
+  assert.deepEqual(looked, ['repos/acme/tools/issues/404', 'repos/acme/widget/issues/123456']);
+  assert.deepEqual(context.references.map((ref) => ref.reference), ['acme/tools#404']);
+  assert.match(context.references[0].error, /HTTP 404/);
+});
+
 test('watch reads open PRs with mergeable, and a departed PR outcome with one read-only call', async () => {
   const calls = [];
   const execute = async (command, args) => {
@@ -829,7 +844,7 @@ test('readConfig: provider defaults to copilot; claude takes its models from the
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, 'config.json');
   const read = async (config) => { await writeFile(path, JSON.stringify(config)); return readConfig(path); };
-  assert.deepEqual(await read({ model: 'm' }), { model: 'm', provider: 'copilot', repositories: [] });
+  assert.deepEqual(await read({ model: 'm' }), { model: 'm', provider: 'copilot', repositories: [], repositoryAliases: {} });
   const claude = await read({ provider: 'claude', model: 'copilot-m', checkModel: 'copilot-c', claude: { model: CLAUDE_MODEL } });
   assert.equal(claude.provider, 'claude');
   assert.equal(claude.model, CLAUDE_MODEL);

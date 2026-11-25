@@ -313,8 +313,10 @@ export async function runSummary(url, { root, adapters, progress, now = new Date
 export async function main(args, options = {}) {
   // The interactive watch returns to its picker after each review or summary.
   const configPath = options.configPath ?? join(resolve(dirname(fileURLToPath(import.meta.url)), '..'), 'config.json');
+  // Read again each time the list is shown, so a change in Settings applies at once.
   const settings = {
     line: async () => settingsLine(JSON.parse(await readFile(configPath, 'utf8'))),
+    aliases: async () => (await readConfig(configPath)).repositoryAliases,
     open: () => (options.openSettings ?? openSettings)({ configPath }),
   };
   if (args[0] === 'watch') {
@@ -355,6 +357,7 @@ export async function main(args, options = {}) {
     url = await (options.pick ?? choosePr)(config.repositories, createAdapters({ ...options, progress: () => {} }), {
       onPick: (choice) => { full = full || Boolean(choice?.full); },
       settings: await settings.line(),
+      aliases: await settings.aliases(),
     });
     if (url === OPEN_SETTINGS) {
       await settings.open();

@@ -6,7 +6,10 @@
   },
   "notify": true,
   "azureDevOpsOrg": "https://dev.azure.com/your-organization",
-  "repositories": ["your-org/your-repo"],
+  "repositories": [
+    "your-org/your-repo",
+    { "repo": "your-org/your-other-repo", "alias": "other" }
+  ],
   "watch": {
     "events": [
       "new",

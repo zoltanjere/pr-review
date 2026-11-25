@@ -2,6 +2,11 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.15.0 (2026-11-25)
+
+- **Aliases for repositories:** give each repository a short name for the PR list's repository column, in **Repositories** in `reviewpr settings` (or `c` in the picker), or as `{ "repo": "acme/widget-fe", "alias": "fe" }` in `repositories`. Repositories whose names differ only at the end, such as `…-fe` and `…-be`, no longer look the same once cut. An alias is 1 to 14 characters, shown as typed, and refused when another repository already uses it. Watch's open app labels its notices with the alias too; desktop notifications and the log keep the full `owner/repo`.
+- **Other trackers' numbers no longer fail as PRs:** a bare `#N` in a PR body that GitHub doesn't know, such as `Feature #123456` from Azure DevOps, is dropped quietly. It used to show `✖ checking referenced … (HTTP 404)` and reach the reviewer as an unknown item. An `owner/repo#N` or github.com link that isn't found is still reported.
+
 ## 0.14.0 (2026-11-25)
 
 - **Several repositories:** list them in `config.json` as `"repositories": ["acme/widget", "acme/gadget"]`. The picker shows all their PRs in one list, in the same groups and order, so the most urgent comes first whichever repository it's in, and a column names each PR's repository (its name, or `owner/repo` when two names clash, at most 14 characters). With one repository nothing looks different. `defaultRepository` still works as a list of one.

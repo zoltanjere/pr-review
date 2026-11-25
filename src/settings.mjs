@@ -2,12 +2,13 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { PROVIDERS, runCommand } from './adapters.mjs';
 import { checkProvider } from './setup.mjs';
-import { pickFromList } from './select.mjs';
+import { aliasProblem, parseRepo, pickFromList, REPO_LABEL_MAX, repoLabels } from './select.mjs';
 import { PROVIDER_NAMES } from './ui.mjs';
 
 // The Settings screen (`c` in the picker, or `reviewpr settings`): which CLI
-// runs the agents, its model, and the bell when a run is done. All are saved
-// in this project's config.json only; neither CLI's own settings are touched.
+// runs the agents, its model, the bell when a run is done, and the aliases
+// that name repositories in the PR list. All are saved in this project's
+// config.json only; neither CLI's own settings are touched.
 
 // A short list per provider; "Other" takes any ID. The run's model check
 // stops at the first agent if an ID is wrong.
@@ -51,6 +52,43 @@ export function withProvider(config, provider) {
   if (slot(next, provider).model) return { config: next, note: null };
   const model = DEFAULT_MODEL[provider];
   return { config: withModel(next, provider, model).config, note: `Model set to ${model}; change it under Model.` };
+}
+
+// The raw config's repositories: [{ repo: "owner/repo", alias }], from
+// "repositories" (strings or objects) or the older "defaultRepository".
+// Entries that aren't a repository are left out; readConfig reports them.
+export function repoEntries(config) {
+  const listed = Array.isArray(config.repositories) ? config.repositories : config.defaultRepository !== undefined ? [config.defaultRepository] : [];
+  const seen = new Set();
+  return listed.flatMap((entry) => {
+    const isObject = entry !== null && typeof entry === 'object';
+    const repo = parseRepo(isObject ? entry.repo : entry);
+    if (!repo || seen.has(repo)) return [];
+    seen.add(repo);
+    return [{ repo, alias: isObject && typeof entry.alias === 'string' ? entry.alias : null }];
+  });
+}
+
+// Sets (or, with an empty alias, removes) one repository's alias in the raw
+// config: its entry becomes { repo, alias }, or a plain "owner/repo" again.
+// Other entries are kept as written. A config that still uses
+// "defaultRepository" moves to "repositories".
+export function withAlias(config, repo, alias) {
+  const listed = Array.isArray(config.repositories) ? config.repositories : config.defaultRepository !== undefined ? [config.defaultRepository] : [];
+  const repositories = listed.map((entry) => {
+    const isObject = entry !== null && typeof entry === 'object';
+    if (parseRepo(isObject ? entry.repo : entry) !== repo) return entry;
+    return alias ? { repo, alias } : repo;
+  });
+  const { defaultRepository, ...rest } = config;
+  return { ...rest, repositories };
+}
+
+// "2 · aliases: fe, be" for the Settings row.
+function repositoriesRow(entries) {
+  if (!entries.length) return 'none: list them in config.json';
+  const aliases = entries.map((entry) => entry.alias).filter(Boolean);
+  return `${entries.length} · ${aliases.length ? `aliases: ${aliases.join(', ')}` : 'no aliases'}`;
 }
 
 // Written back with the file's own indentation. Other keys are kept.
@@ -100,9 +138,14 @@ export async function openSettings({
       `Provider  ${PROVIDER_NAMES[now.provider]}`,
       `Model     ${now.model ?? 'not set'}${now.checkModel && now.checkModel !== now.model ? ` · check: ${now.checkModel}` : ''}`,
       `Bell      ${BELL(config)}`,
+      `Repositories  ${repositoriesRow(repoEntries(config))}`,
       'Done',
     ], { hint: 'Enter change · q done' });
-    if (choice === null || choice === 3) return;
+    if (choice === null || choice === 4) return;
+    if (choice === 3) {
+      await editAliases({ configPath, pick, ask, output });
+      continue;
+    }
     let change;
     if (choice === 2) {
       const on = config.notify === false;
@@ -135,5 +178,43 @@ export async function openSettings({
     }
     await writeFile(configPath, formatConfig(change.config, text));
     output.write(`Saved: ${settingsLine(change.config)}${change.note ? `\n${change.note}` : ''}\n`);
+  }
+}
+
+// The Repositories screen: one row per configured repository with its alias
+// (or the label it gets without one). Enter asks for an alias; empty removes
+// it, and one aliasProblem refuses is explained and asked again. Each change
+// is saved at once and the screen stays open; q or Done goes back.
+async function editAliases({ configPath, pick, ask, output }) {
+  let index = 0;
+  for (;;) {
+    const text = await readFile(configPath, 'utf8');
+    const config = JSON.parse(text);
+    const entries = repoEntries(config);
+    if (!entries.length) {
+      output.write('No repositories yet: list them in config.json as "repositories": ["owner/repo"].\n');
+      return;
+    }
+    const repos = entries.map((entry) => entry.repo);
+    const aliases = Object.fromEntries(entries.filter((entry) => entry.alias).map((entry) => [entry.repo, entry.alias]));
+    // What the PR list shows now, so a repository without an alias shows its
+    // label (with one repository, its name).
+    const labels = repoLabels(repos, aliases) ?? { [repos[0]]: repos[0].split('/')[1] };
+    const width = Math.max(...repos.map((repo) => repo.length));
+    const rows = entries.map((entry) => `${entry.repo.padEnd(width)}  ${entry.alias ?? `(none: ${labels[entry.repo]})`}`);
+    const picked = await pick('Repositories (aliases name them in the PR list)', [...rows, 'Done'], { initial: index, hint: 'Enter set alias · q back' });
+    if (picked === null || picked === entries.length) return;
+    index = picked;
+    const { repo, alias: before } = entries[picked];
+    let alias;
+    for (;;) {
+      alias = String(await ask(`Alias for ${repo} (empty removes it, at most ${REPO_LABEL_MAX} characters): `) ?? '').trim();
+      const problem = alias ? aliasProblem(alias, repo, repos, aliases) : null;
+      if (!problem) break;
+      output.write(`Not saved: ${problem}.\n`);
+    }
+    if ((alias || null) === before) continue;
+    await writeFile(configPath, formatConfig(withAlias(config, repo, alias), text));
+    output.write(alias ? `Saved: ${repo} shows as ${alias}.\n` : `Saved: ${repo} has no alias.\n`);
   }
 }

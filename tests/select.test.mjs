@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { candidatePrs, choosePr, formatRows, hiddenSummary, OPEN_SETTINGS, ownLabel, pickFromList, repoLabels, reviewedHead } from '../src/select.mjs';
+import { candidatePrs, choosePr, formatRows, aliasProblem, hiddenSummary, OPEN_SETTINGS, ownLabel, pickFromList, repoLabels, reviewedHead } from '../src/select.mjs';
 
 const ME = 'me';
 const HEAD = 'a7e50c828a1b2de30d5bec350ee37e1d368490ad';
@@ -492,4 +492,52 @@ test('several repositories: one that can\'t be read is named in the header, the 
   assert.deepEqual(Object.keys(state.lastLooked), ['acme/widget']);
   // None readable: the error stops the picker, as with one repository.
   await assert.rejects(choosePr(['acme/api'], adapters, { ...fakeTerminal(), statePath }), /No local repository/);
+});
+
+test('aliases name repositories as typed; the rest keep the usual label', () => {
+  const repos = ['acme/word-word-word-fe', 'acme/word-word-word-be', 'acme/api'];
+  assert.deepEqual(repoLabels(repos), { 'acme/word-word-word-fe': '…-word-word-fe', 'acme/word-word-word-be': '…-word-word-be', 'acme/api': 'api' });
+  assert.deepEqual(repoLabels(repos, { 'acme/word-word-word-fe': 'fe', 'acme/word-word-word-be': 'be' }), { 'acme/word-word-word-fe': 'fe', 'acme/word-word-word-be': 'be', 'acme/api': 'api' });
+  // One alias set: the other long name no longer clashes and gets its own cut name.
+  assert.deepEqual(repoLabels(repos.slice(0, 2), { 'acme/word-word-word-fe': 'frontend/web.1' }), { 'acme/word-word-word-fe': 'frontend/web.1', 'acme/word-word-word-be': 'word-word-wor…' });
+});
+
+test('aliasProblem: 1 to 14 allowed characters, not another repository\'s alias or name', () => {
+  const repos = ['acme/widget', 'acme/gadget'];
+  assert.equal(aliasProblem('w', 'acme/widget', repos), null);
+  assert.equal(aliasProblem('widget', 'acme/widget', repos), null);
+  assert.match(aliasProblem('', 'acme/widget', repos), /1 to 14 characters/);
+  assert.match(aliasProblem('abcdefghijklmno', 'acme/widget', repos), /1 to 14 characters/);
+  assert.match(aliasProblem('my alias', 'acme/widget', repos), /letters, digits/);
+  assert.match(aliasProblem('Gadget', 'acme/widget', repos), /already used by acme\/gadget/);
+  assert.match(aliasProblem('g', 'acme/widget', repos, { 'acme/gadget': 'G' }), /already used by acme\/gadget/);
+});
+
+test('several repositories with aliases: the column shows them', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'picker-state-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const adapters = { findClone: async () => {}, viewer: async () => ME, listOpenPrs: async (repo) => [pr(repo.endsWith('fe') ? 61 : 7)], reviewCommit: async () => null };
+  const term = fakeTerminal();
+  term.output.rows = 20;
+  const url = choosePr(['acme/word-word-word-fe', 'acme/word-word-word-be'], adapters, { ...term, statePath: join(dir, 'picker.json'), aliases: { 'acme/word-word-word-fe': 'fe', 'acme/word-word-word-be': 'be' } });
+  term.press('return');
+  await url;
+  assert.match(term.text(), /fe  #61/);
+  assert.match(term.text(), /be  #7 /);
+});
+
+test('readConfig: repository entries may be objects with an alias, checked like the picker', async (t) => {
+  const { readConfig } = await import('../src/adapters.mjs');
+  const dir = await mkdtemp(join(tmpdir(), 'alias-config-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, 'config.json');
+  const read = async (repositories) => { await writeFile(path, JSON.stringify({ model: 'm', repositories })); return readConfig(path); };
+  const config = await read([{ repo: 'https://github.com/acme/word-word-word-fe', alias: 'fe' }, 'acme/word-word-word-be', { repo: 'acme/api' }]);
+  assert.deepEqual(config.repositories, ['acme/word-word-word-fe', 'acme/word-word-word-be', 'acme/api']);
+  assert.deepEqual(config.repositoryAliases, { 'acme/word-word-word-fe': 'fe' });
+  await assert.rejects(read([{ repo: 'acme/widget', name: 'w' }]), /unknown key "name"/);
+  await assert.rejects(read([{ alias: 'w' }]), /must look like owner\/repo/);
+  await assert.rejects(read([{ repo: 'acme/widget', alias: 'has space' }]), /alias "has space" for acme\/widget: an alias may use letters/);
+  await assert.rejects(read([{ repo: 'acme/widget', alias: 'x' }, { repo: 'acme/gadget', alias: 'X' }]), /alias "x" for acme\/widget: "x" is already used by acme\/gadget/);
+  await assert.rejects(read([{ repo: 'acme/widget', alias: 3 }]), /must be text/);
 });

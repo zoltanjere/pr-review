@@ -111,7 +111,7 @@ reviewpr settings              # choose the provider (Copilot or Claude Code) an
 | `claude.checkModel` | Claude Code model for the check, follow-up and summary sessions. Defaults to `claude.model`. |
 | `notify` | `false` turns off the terminal bell when a review or summary is done. On by default; also in [Settings](#settings). |
 | `azureDevOpsOrg` | `https://dev.azure.com/<org>`, used to fetch `AB#<id>` work items. This needs the [Azure CLI](https://learn.microsoft.com/cli/azure/) with the `azure-devops` extension, and is optional. |
-| `repositories` | The repositories to pick PRs from, and for watch to check: `["acme/widget", "acme/gadget"]`. Each needs a local clone next to this folder for its PRs to be listed. The older `"defaultRepository": "acme/widget"` still works as a list of one; set one or the other, not both. |
+| `repositories` | The repositories to pick PRs from, and for watch to check: `["acme/widget", "acme/gadget"]`. An entry can also be `{ "repo": "acme/widget-fe", "alias": "fe" }`, to name it `fe` in the PR list (see [Settings](#settings)). Each needs a local clone next to this folder for its PRs to be listed. The older `"defaultRepository": "acme/widget"` still works as a list of one; set one or the other, not both. |
 | `watch.events` | Which changes notify you (see [Watch](#watch)). Defaults to `["all"]`. |
 | `watch.intervalMinutes` | How often watch checks. Defaults to 5; the minimum is 2. |
 
@@ -124,11 +124,12 @@ Use model IDs exactly as Copilot's `/model` lists them. Claude Code names the sa
 
 ### Settings
 
-`reviewpr settings`, or `c` in the picker, opens a small screen with three rows:
+`reviewpr settings`, or `c` in the picker, opens a small screen with four rows:
 
 - **Provider:** where the models come from: **Copilot** or **Claude Code**. A CLI that isn't installed (or Claude Code on Windows) is shown but can't be chosen. A provider that isn't signed in can be chosen, with a warning that names the sign-in command. Choosing a provider for the first time sets its model to Sonnet.
 - **Model:** a short list for the current provider (Haiku, Sonnet, Opus), or **Other** to type any ID. The choice sets both `model` and `checkModel` of that provider; the screen says when it replaced a different check model. A separate check model can still be set by hand in `config.json`.
 - **Bell:** on or off (`notify` in `config.json`). See [A review run](#a-review-run).
+- **Repositories:** a short name (alias) for each repository in `repositories`, used in the PR list's repository column. Enter on a repository asks for its alias, and an empty answer removes it. An alias is 1 to 14 characters (letters, digits, `.` `_` `/` `-`), is shown exactly as typed, and can't be another repository's alias or name. It's saved as `{ "repo": "…", "alias": "…" }` in `repositories`. Adding or removing repositories is done in `config.json`.
 
 The picker shows the current setting above its keys: `Provider: Claude Code · Model: claude-sonnet-5-5`, and so does every run. The choice is saved in this project's `config.json` only. Neither CLI's own settings, `gh` or your other projects change.
 
@@ -193,7 +194,7 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
     ● gadget  #210  1h   ana-dev    fix: null tenant id
     ● widget  #68   10m  octo-dev   feat: show upload progress in the status bar
   ```
-  - **The column** shows the repository's name, or `owner/repo` when two configured repositories have the same name. It's at most 14 characters, cut with `…`, so a long name never pushes the titles right. With one repository there's no column and the list looks as before.
+  - **The column** shows the repository's alias when you set one in [Settings](#settings). Otherwise it shows the repository's name, or `owner/repo` when two configured repositories have the same name, at most 14 characters and cut with `…`, so a long name never pushes the titles right. Names that differ only at the end, such as `word-word-word-fe` and `word-word-word-be`, are hard to tell apart once cut; give them aliases such as `fe` and `be`. With one repository there's no column and the list looks as before.
   - **A repository that can't be read** (no access, no local clone, a GitHub error) is named in the header, `⚠ api: couldn't read (…)`, and the others are still listed. Its "since you looked" time is kept for the next visit.
 - **Where this is kept:** skips and the time you last looked live in `state/picker.json` on your machine only, which is git-ignored. Nothing is written to GitHub.
 

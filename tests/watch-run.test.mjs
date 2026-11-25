@@ -338,3 +338,37 @@ test('the app over several repositories: one list with a repository column, mark
   term.press('q');
   await done;
 });
+
+test('the app over several repositories labels notices with the alias', async (t) => {
+  const { paths } = await folder(t);
+  const adapters = twoRepos({ 'acme/widget': [[pr(9)], []], 'acme/gadget': [[pr(1)], [pr(1)]] });
+  const term = appTerminal();
+  const ticks = [];
+  const timers = { setInterval: (fn, ms) => { ticks.push({ fn, ms }); return ticks.length; }, clearInterval: () => {} };
+  const done = runApp(['acme/widget', 'acme/gadget'], adapters, {
+    events: ['new', 'merged'], intervalMinutes: 5, paths, timers, input: term.input, output: term.output, now: () => NOW,
+    notify: async () => {}, review: async () => {}, aliases: { 'acme/widget': 'wdg' },
+  });
+  await until(() => /wdg +#9/.test(term.text()));
+  ticks.find((timer) => timer.ms === 5 * 60_000).fn();
+  await until(() => term.text().includes('wdg: ✔ #9 merged by lee'));
+  term.press('q');
+  await done;
+});
+
+test('the app uses aliases changed in Settings when the list comes back', async (t) => {
+  const { paths } = await folder(t);
+  const adapters = twoRepos({ 'acme/widget': [[pr(9)]], 'acme/gadget': [[pr(1)]] });
+  const term = appTerminal();
+  const timers = { setInterval: () => 0, clearInterval: () => {} };
+  const seen = [];
+  const { OPEN_SETTINGS } = await import('../src/select.mjs');
+  const answers = [OPEN_SETTINGS, null];
+  let aliases = {};
+  await runApp(['acme/widget', 'acme/gadget'], adapters, {
+    events: ['new'], intervalMinutes: 5, paths, timers, input: term.input, output: term.output, now: () => NOW, notify: async () => {},
+    settings: { line: async () => '', open: async () => { aliases = { 'acme/widget': 'wdg' }; }, aliases: async () => aliases },
+    pick: async (repos, a, options) => { seen.push(options.aliases); return answers.shift(); },
+  });
+  assert.deepEqual(seen, [{}, { 'acme/widget': 'wdg' }]);
+});

@@ -32,10 +32,10 @@ export const AGENT_LABEL = 'local.reviewpr.watch';
 // before notifying, so a failed notification never repeats on the next poll.
 // A repository that can't be read is returned in `unreadable` and keeps its
 // memory; the others still notify. None readable: the error is thrown.
-export async function pollOnce(repos, adapters, { events, paths = PATHS, notify = showNotification, now = Date.now(), seenAt = null, status = () => {}, clone = false } = {}) {
+export async function pollOnce(repos, adapters, { events, paths = PATHS, notify = showNotification, now = Date.now(), seenAt = null, status = () => {}, clone = false, aliases = {} } = {}) {
   let memory = loadJson(paths.memory, MEMORY_FIELDS);
   const skips = loadState(paths.picker).skipped;
-  const scan = await scanRepos([].concat(repos), adapters, { now, seenAt, status, clone });
+  const scan = await scanRepos([].concat(repos), adapters, { now, seenAt, status, clone, aliases });
   const notifications = [];
   for (const [repo, repoScan] of Object.entries(scan.byRepo)) {
     const outcomes = {};
@@ -228,7 +228,7 @@ export async function watchCommand(args, options = {}) {
   }
   const interactive = options.interactive ?? Boolean(process.stdin.isTTY && process.stderr.isTTY);
   if (!interactive) throw new Error('The interactive watch needs a terminal. In the background, use reviewpr watch --install.');
-  await runApp(repos, adapters, { events, intervalMinutes, paths, notify: options.notify, review: options.review, settings: options.settings, input: options.input, output: options.output });
+  await runApp(repos, adapters, { aliases: config.repositoryAliases, events, intervalMinutes, paths, notify: options.notify, review: options.review, settings: options.settings, input: options.input, output: options.output });
 }
 
 // Events that never become picker rows: they show on the status line only.
@@ -240,12 +240,12 @@ const FAILURES_BEFORE_NOTICE = 3;
 // place, and Enter runs a review in this terminal and comes back here. Holds
 // the lock so the launchd mode stays quiet meanwhile; q quits and frees it.
 export async function runApp(repoOrRepos, adapters, {
-  events, intervalMinutes, paths = PATHS, notify = showNotification, review, settings, input, output = process.stderr,
+  events, intervalMinutes, paths = PATHS, notify = showNotification, review, settings, input, output = process.stderr, aliases = {},
   now = () => Date.now(), pick = choosePr, alive, timers = { setInterval, clearInterval },
 } = {}) {
   if (lockState(paths.lock, { now: now(), alive }) === 'live') throw new Error('Another reviewpr watch is already running in a terminal.');
   const repos = [].concat(repoOrRepos);
-  const labels = repoLabels(repos);
+  let labels = repoLabels(repos, aliases);
   writeLock(paths.lock, { now: now() });
   const beat = timers.setInterval(() => writeLock(paths.lock, { now: now() }), 60_000);
   const marks = new Set();
@@ -263,7 +263,7 @@ export async function runApp(repoOrRepos, adapters, {
   const poll = (status = () => {}) => {
     polling ??= (async () => {
       try {
-        const result = await pollOnce(repos, adapters, { events, paths, notify, now: now(), seenAt, status, clone: true });
+        const result = await pollOnce(repos, adapters, { events, paths, notify, now: now(), seenAt, status, clone: true, aliases });
         checkedAt = now();
         lastScan = result.scan;
         failures = 0;
@@ -319,9 +319,14 @@ export async function runApp(repoOrRepos, adapters, {
   try {
     for (;;) {
       let full = false;
-      const url = await pick(repos, adapters, { input, output, watch, statePath: paths.picker, settings: await settings?.line(), onPick: (choice) => { full = Boolean(choice?.full); } });
+      const url = await pick(repos, adapters, { aliases, input, output, watch, statePath: paths.picker, settings: await settings?.line(), onPick: (choice) => { full = Boolean(choice?.full); } });
       if (url === OPEN_SETTINGS) {
         await settings.open();
+        // Aliases set there name the repositories from the next list on.
+        if (settings.aliases) {
+          aliases = await settings.aliases().catch(() => aliases);
+          labels = repoLabels(repos, aliases);
+        }
         continue;
       }
       if (!url) break;

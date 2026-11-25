@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { currentSettings, formatConfig, openSettings, settingsLine, withModel, withProvider } from '../src/settings.mjs';
+import { currentSettings, formatConfig, openSettings, repoEntries, settingsLine, withAlias, withModel, withProvider } from '../src/settings.mjs';
 import { costLines } from '../src/confirm.mjs';
 import { plainReporter } from '../src/ui.mjs';
 
@@ -56,8 +56,8 @@ async function screen(t, config, answers, { ask = async () => '', available = as
 }
 
 test('Settings: choose Claude Code, then a model; other keys and indentation stay', async (t) => {
-  const { config, raw, shown, text } = await screen(t, COPILOT, [0, 1, 1, 1, 3]);
-  assert.deepEqual(shown[0].rows, ['Provider  Copilot', 'Model     claude-haiku-5.5', 'Bell      on, when a review or summary is done', 'Done']);
+  const { config, raw, shown, text } = await screen(t, COPILOT, [0, 1, 1, 1, 4]);
+  assert.deepEqual(shown[0].rows, ['Provider  Copilot', 'Model     claude-haiku-5.5', 'Bell      on, when a review or summary is done', 'Repositories  1 · no aliases', 'Done']);
   assert.deepEqual(shown[1].rows, ['Copilot', 'Claude Code']);
   assert.deepEqual(shown[3].rows, ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-opus-5-5', 'Other (type an ID)']);
   assert.deepEqual(config, { ...COPILOT, provider: 'claude', claude: { model: 'claude-haiku-5-5', checkModel: 'claude-haiku-5-5' } });
@@ -78,8 +78,34 @@ test('Settings: a missing CLI can\'t be chosen; Other takes a typed ID and rejec
   const bad = await screen(t, COPILOT, [1, 3], { ask: async () => 'two words' });
   assert.deepEqual(bad.config, COPILOT);
   assert.match(bad.text, /Not a model ID: two words/);
-  const cancelled = await screen(t, COPILOT, [1, null, 3]);
+  const cancelled = await screen(t, COPILOT, [1, null, 4]);
   assert.deepEqual(cancelled.config, COPILOT);
+});
+
+test('withAlias sets or removes one entry\'s alias and keeps the others as written', () => {
+  const config = { model: 'm', repositories: ['https://github.com/acme/word-word-word-fe/', { repo: 'acme/word-word-word-be', alias: 'be' }, 'acme/api'] };
+  const set = withAlias(config, 'acme/word-word-word-fe', 'fe');
+  assert.deepEqual(set.repositories, [{ repo: 'acme/word-word-word-fe', alias: 'fe' }, { repo: 'acme/word-word-word-be', alias: 'be' }, 'acme/api']);
+  assert.deepEqual(withAlias(set, 'acme/word-word-word-be', '').repositories, [{ repo: 'acme/word-word-word-fe', alias: 'fe' }, 'acme/word-word-word-be', 'acme/api']);
+  assert.deepEqual(repoEntries(set), [{ repo: 'acme/word-word-word-fe', alias: 'fe' }, { repo: 'acme/word-word-word-be', alias: 'be' }, { repo: 'acme/api', alias: null }]);
+  // The older single key moves to "repositories".
+  assert.deepEqual(withAlias(COPILOT, 'acme/widget', 'w'), { model: 'claude-haiku-5.5', repositories: [{ repo: 'acme/widget', alias: 'w' }], watch: { intervalMinutes: 5 } });
+});
+
+test('Settings: Repositories sets an alias, refuses a taken or long one, removes one; the file keeps its form', async (t) => {
+  const config = { model: 'm', repositories: ['acme/word-word-word-fe', { repo: 'acme/word-word-word-be', alias: 'be' }], notify: true };
+  const answers = ['BE', 'a-much-too-long-alias', 'fe', ''];
+  const { config: saved, raw, shown, text } = await screen(t, config, [3, 0, 1, null, 4], { ask: async () => answers.shift() });
+  assert.equal(shown[0].rows[3], 'Repositories  2 · aliases: be');
+  assert.deepEqual(shown[1].rows, ['acme/word-word-word-fe  (none: word-word-wor…)', 'acme/word-word-word-be  be', 'Done']);
+  assert.deepEqual(shown[2].rows, ['acme/word-word-word-fe  fe', 'acme/word-word-word-be  be', 'Done']);
+  assert.match(text, /Not saved: "BE" is already used by acme\/word-word-word-be\.\n/);
+  assert.match(text, /Not saved: an alias is 1 to 14 characters\.\n/);
+  assert.match(text, /Saved: acme\/word-word-word-fe shows as fe\.\nSaved: acme\/word-word-word-be has no alias\.\n/);
+  assert.deepEqual(saved, { model: 'm', repositories: [{ repo: 'acme/word-word-word-fe', alias: 'fe' }, 'acme/word-word-word-be'], notify: true });
+  assert.match(raw, /^ {4}"model"/m);
+  const none = await screen(t, { model: 'm' }, [3, 4]);
+  assert.match(none.text, /No repositories yet/);
 });
 
 test('Settings without a config.json says to copy the example', async () => {
@@ -141,4 +167,21 @@ test('notify in config.json must be true or false', async (t) => {
   await assert.rejects(readConfig(path), /notify .* must be true or false/);
   await writeFile(path, JSON.stringify({ model: 'm', notify: false }));
   assert.equal((await readConfig(path)).notify, false);
+});
+
+test('aliases changed in Settings apply to the list right away, without a restart', async (t) => {
+  const { main } = await import('../src/review.mjs');
+  const { OPEN_SETTINGS } = await import('../src/select.mjs');
+  const dir = await mkdtemp(join(tmpdir(), 'settings-alias-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const configPath = join(dir, 'config.json');
+  await writeFile(configPath, JSON.stringify({ model: 'm', repositories: ['acme/word-word-word-fe', 'acme/word-word-word-be'] }));
+  const seen = [];
+  const answers = [OPEN_SETTINGS, null];
+  await main([], {
+    configPath, interactive: true,
+    pick: async (repos, adapters, { aliases }) => { seen.push(aliases); return answers.shift(); },
+    openSettings: async () => writeFile(configPath, JSON.stringify({ model: 'm', repositories: [{ repo: 'acme/word-word-word-fe', alias: 'fe' }, 'acme/word-word-word-be'] })),
+  });
+  assert.deepEqual(seen, [{}, { 'acme/word-word-word-fe': 'fe' }]);
 });

@@ -463,13 +463,14 @@ Each entry has three parts:
 - **Don't:** If a banner is wanted later, send it through `osascript` only, never terminal-notifier: macOS files those under another app (Script Editor), whose style can stay a short banner (plans/run-notification.md).
 
 ### 7.8 Several repositories in one list and one watch
-- **Decision:** `config.json` takes `"repositories": ["owner/repo", …]`. The older `defaultRepository` is read as a list of one, and setting both is an error. The picker and watch read every repository at the same time (`scanRepos`) and merge them into one list, sorted by state and age as before. With two or more repositories, each row has a repository column after the icon (`repoLabels`): the name, `owner/repo` when names clash, at most 14 characters. PRs are identified by `owner/repo#number` everywhere (skips, focus, watch marks). A repository that can't be read, including one with no local clone in the picker, is named in the header or logged, keeps its memory and "last looked" time, and doesn't stop the others. Only when none can be read does it fail as before.
+- **Decision:** `config.json` takes `"repositories": ["owner/repo", …]`. The older `defaultRepository` is read as a list of one, and setting both is an error. The picker and watch read every repository at the same time (`scanRepos`) and merge them into one list, sorted by state and age as before. With two or more repositories, each row has a repository column after the icon (`repoLabels`): the repository's alias when set, otherwise the name, `owner/repo` when names clash, at most 14 characters. An alias is set in Settings or as `{ "repo", "alias" }` in `repositories`. It is 1–14 characters, shown as typed, and refused when another repository's alias or name already uses it (`aliasProblem`), both in Settings and when `config.json` is read. PRs are identified by `owner/repo#number` everywhere (skips, focus, watch marks). A repository that can't be read, including one with no local clone in the picker, is named in the header or logged, keeps its memory and "last looked" time, and doesn't stop the others. Only when none can be read does it fail as before.
 - **Why:**
   - **Mixed, not grouped by repository:** the point of the list is what needs you most. Grouping would put urgent work in the second repository below everything in the first (user decision, 2026-11-25).
   - **The capped label:** long repository names would otherwise push titles and labels past the 100-column rows. The name alone is enough when it's unique.
+  - **Aliases:** names that differ only at the end (`…-fe`, `…-be`) are cut to the same start, so the cut label can't tell them apart. An alias that's refused rather than cut keeps every row readable. It's stored on the entry itself, so a repository and its alias are listed together (user decision, 2026-11-25).
   - **One repository looks as before,** so existing setups see no change.
   - **One broken repository doesn't block the others:** a renamed repository or lost access is common and shouldn't hide the rest.
-- **Don't:** Add a per-repository filter key or label aliases until one busy repository actually drowns the others.
+- **Don't:** Add a per-repository filter key until one busy repository actually drowns the others.
 
 ## 8. Evaluation
 

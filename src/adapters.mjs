@@ -256,14 +256,22 @@ export async function readConfig(configPath = join(projectRoot, 'config.json')) 
   if (config.azureDevOpsOrg !== undefined && !/^https:\/\/dev\.azure\.com\/[^/\s]+\/?$/.test(config.azureDevOpsOrg)) {
     throw new Error(`azureDevOpsOrg in ${configPath} must look like https://dev.azure.com/<organization>`);
   }
-  if (config.defaultRepository !== undefined) {
-    // "owner/repo", or its github.com URL, using the same name rules as PR URLs.
-    const match = /^(?:https:\/\/github\.com\/)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(String(config.defaultRepository));
-    if (!match || ['.', '..'].includes(match[1]) || ['.', '..'].includes(match[2])) {
-      throw new Error(`defaultRepository in ${configPath} must look like owner/repo`);
-    }
-    config.defaultRepository = `${match[1]}/${match[2]}`;
+  // "repositories": ["owner/repo", …]; the older "defaultRepository" is a list of one.
+  if (config.repositories !== undefined && config.defaultRepository !== undefined) {
+    throw new Error(`Set either repositories or defaultRepository in ${configPath}, not both: keep "repositories": [...]`);
   }
+  const key = config.repositories !== undefined ? 'repositories' : 'defaultRepository';
+  const listed = config.repositories ?? (config.defaultRepository === undefined ? [] : [config.defaultRepository]);
+  if (!Array.isArray(listed)) throw new Error(`repositories in ${configPath} must be a list such as ["owner/repo"]`);
+  config.repositories = [...new Set(listed.map((entry) => {
+    // "owner/repo", or its github.com URL, using the same name rules as PR URLs.
+    const match = /^(?:https:\/\/github\.com\/)?([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(String(entry));
+    if (!match || ['.', '..'].includes(match[1]) || ['.', '..'].includes(match[2])) {
+      throw new Error(`${key} in ${configPath} must look like owner/repo (got ${JSON.stringify(entry)})`);
+    }
+    return `${match[1]}/${match[2]}`;
+  }))];
+  delete config.defaultRepository;
   // The rest of the pipeline reads model and checkModel, whichever the provider.
   if (provider === 'claude') return { ...config, provider, model: config.claude.model, checkModel: config.claude.checkModel };
   return { ...config, provider };

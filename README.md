@@ -31,7 +31,7 @@ gh auth login
 copilot login                        # or: claude auth login
 cd pr-review
 nvm install && npm ci
-cp config.example.json config.json   # then set "defaultRepository" to the owner/repo you review
+cp config.example.json config.json   # then list the owner/repo you review in "repositories"
 mkdir -p ~/.local/bin && ln -s "$PWD/src/review.mjs" ~/.local/bin/reviewpr
 ```
 
@@ -47,7 +47,7 @@ copilot login
 cd pr-review
 nvm use 26                           # nvm-windows
 npm ci
-copy config.example.json config.json # then set "defaultRepository"
+copy config.example.json config.json # then set "repositories"
 ```
 
 On Windows, type `npm run review --` where the commands below say `reviewpr`, for example `npm run review -- <PR URL>`.
@@ -56,7 +56,7 @@ On Windows, type `npm run review --` where the commands below say `reviewpr`, fo
 
 ```sh
 reviewpr <PR URL>            # review one PR
-reviewpr                     # pick a PR from defaultRepository, then review or summarise it
+reviewpr                     # pick a PR from your repositories, then review or summarise it
 reviewpr settings            # switch between Copilot and Claude Code, or change the model
 reviewpr watch --install     # macOS: get notified when a PR needs you
 ```
@@ -83,7 +83,7 @@ When something is missing, the tool says what it is and how to fix it:
 
 ```sh
 reviewpr <pr-url>              # review one PR (or: node src/review.mjs <pr-url>)
-reviewpr                       # pick from defaultRepository's open PRs
+reviewpr                       # pick from the open PRs of your repositories
 reviewpr --yes <url>           # no prompts, never posts; the digest goes to stdout
 reviewpr --full <url>          # a full review, even where a follow-up is possible
 reviewpr --summary <url>       # a short, plain summary of what the PR does; never posted
@@ -111,7 +111,7 @@ reviewpr settings              # choose the provider (Copilot or Claude Code) an
 | `claude.checkModel` | Claude Code model for the check, follow-up and summary sessions. Defaults to `claude.model`. |
 | `notify` | `false` turns off the terminal bell when a review or summary is done. On by default; also in [Settings](#settings). |
 | `azureDevOpsOrg` | `https://dev.azure.com/<org>`, used to fetch `AB#<id>` work items. This needs the [Azure CLI](https://learn.microsoft.com/cli/azure/) with the `azure-devops` extension, and is optional. |
-| `defaultRepository` | `owner/repo` to pick PRs from, and for watch to check. |
+| `repositories` | The repositories to pick PRs from, and for watch to check: `["acme/widget", "acme/gadget"]`. Each needs a local clone next to this folder for its PRs to be listed. The older `"defaultRepository": "acme/widget"` still works as a list of one; set one or the other, not both. |
 | `watch.events` | Which changes notify you (see [Watch](#watch)). Defaults to `["all"]`. |
 | `watch.intervalMinutes` | How often watch checks. Defaults to 5; the minimum is 2. |
 
@@ -141,7 +141,7 @@ The picker shows the current setting above its keys: `Provider: Claude Code · M
 
 ### PR picker
 
-`reviewpr` without a URL lists the open PRs of `defaultRepository` that you haven't reviewed yet, plus ones with new commits since your review, grouped by what needs you most:
+`reviewpr` without a URL lists the open PRs of your `repositories` that you haven't reviewed yet, plus ones with new commits since your review, grouped by what needs you most:
 
 ```
 acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
@@ -182,6 +182,19 @@ acme/widget: 6 to review, 1 yours, 1 skipped (9 open; hidden: 1 draft)
 - **Keys:** `↑`/`↓` move, Enter picks the PR, `f` starts a full review straight away, `c` opens [Settings](#settings), and `q` cancels.
   - **After Enter,** a small menu asks what to do: **Review it** (the default, so Enter twice reviews as before, a follow-up where possible), **Summarise it first** (see [PR summary](#pr-summary)), or **Back to the list**.
   - **Other keys:** `s` skips the highlighted PR until its author pushes a new commit, and `a` shows skipped PRs again (press `s` on one to unskip it).
+- **Several repositories:** their PRs share one list, in the same groups and order, so the most urgent PR comes first whichever repository it's in. A column after the icon names the repository:
+  ```
+  2 repositories: 4 to review (11 open; hidden: 1 draft) · last looked 2h ago
+    Fixes pushed
+  ❯ ⟳ widget  #61   2h   octo-dev   fix: resume uploads after a dropped connection  3 new commits
+    Asked for you
+    ★ gadget  #204  5h   lee-park   chore: bump the test runner                     requested
+    New since you looked
+    ● gadget  #210  1h   ana-dev    fix: null tenant id
+    ● widget  #68   10m  octo-dev   feat: show upload progress in the status bar
+  ```
+  - **The column** shows the repository's name, or `owner/repo` when two configured repositories have the same name. It's at most 14 characters, cut with `…`, so a long name never pushes the titles right. With one repository there's no column and the list looks as before.
+  - **A repository that can't be read** (no access, no local clone, a GitHub error) is named in the header, `⚠ api: couldn't read (…)`, and the others are still listed. Its "since you looked" time is kept for the next visit.
 - **Where this is kept:** skips and the time you last looked live in `state/picker.json` on your machine only, which is git-ignored. Nothing is written to GitHub.
 
 ### Watch
@@ -214,15 +227,29 @@ Watch sends a macOS notification when something you care about changes. It check
 - **In the background** (`reviewpr watch --install`):
   - A launchd agent, `~/Library/LaunchAgents/local.reviewpr.watch.plist`, runs `reviewpr watch --once` at load and then every `intervalMinutes`, including after a reboot.
   - It uses the Node and `PATH` of the terminal you install from, so install from a shell where `gh` works.
-  - Its log is `state/watch.log`. Run `--install` again after changing `watch` in `config.json`.
+  - It checks every repository in `repositories`. Its log is `state/watch.log`, with one line per repository per check. See [Updating watch](#updating-watch) for when to run `--install` again.
 - **In a terminal** (`reviewpr watch`): the picker, kept open.
   - It checks on the same interval, refreshes the list in place and marks new items with `•` until you move onto them. `r` checks immediately.
   - Enter opens the same menu (Review it, Summarise it first, Back to the list) for the highlighted PR, right there, and you come back to the list afterwards. Checking continues during a review, as desktop notifications only.
-  - Merges and events on your own PRs appear on the status line, such as `✔ #61 merged by lee-park · 2m ago`.
+  - Merges and events on your own PRs appear on the status line, such as `✔ #61 merged by lee-park · 2m ago` (`widget: ✔ #61 merged …` with several repositories).
   - While it's open, the background check stays quiet, so you never get two notifications for one change.
   - A failed check keeps the last list on screen and says so, and the third failure in a row sends one notification.
 
+- **Several repositories:** each one is checked, primed and remembered on its own, and every notification names its repository. One that can't be read is logged (`poll failed: acme/api: …`) and the others still notify; in the open app, three failed checks in a row for one repository send one notification.
+
 Notifications never start a review or post anything; clicking one only opens the PR. Watch's memory lives in `state/watch.json`, which is git-ignored.
+
+#### Updating watch
+
+Each background check is a fresh `node src/review.mjs watch --once`, so it picks up most changes by itself. An open `reviewpr watch` is one long-running process, so it doesn't.
+
+| What changed | Background watch (`--install`) | Open `reviewpr watch` |
+|---|---|---|
+| reviewpr's code (`git pull`) | Nothing to do: the next check runs the new code. | Press `q` and start it again. |
+| Dependencies (`npm ci`) | Nothing to do. | `q` and start it again. |
+| `repositories` or `watch.events` in `config.json` | Nothing to do: every check reads `config.json`. | `q` and start it again. |
+| `watch.intervalMinutes` | Run `reviewpr watch --install` again: the interval is stored in the launchd agent. | `q` and start it again. |
+| Node version (for example with nvm) | Run `reviewpr watch --install` again from a shell on the new Node: the agent stores Node's full path and your `PATH`. If that Node was removed, checks fail and `state/watch.log` says so. | `q` and start it again. |
 
 #### After `reviewpr watch --install`
 
@@ -238,7 +265,7 @@ For notifications you can click, also run `brew install terminal-notifier`.
   The first line says what happened, the second is the PR title, the third says who and how much. It plays the default sound, and clicking it opens the PR in your browser. To review it, run `reviewpr` in a terminal.
 - **Reboots and sleep:** it keeps working after a reboot without a terminal open. If the Mac was asleep, it checks when it wakes.
 - **Cost:** none. It only reads GitHub through `gh` and uses no model. It never posts and never starts a review.
-- **Defaults:** every event is on (`all`). Pick fewer in `config.json` (see [Watch](#watch)), then run `reviewpr watch --install` again.
+- **Defaults:** every event is on (`all`). Pick fewer in `config.json` (see [Watch](#watch)); the next check uses them.
 - **To stop it:** `reviewpr watch --uninstall`.
 
 Prefer a terminal? `reviewpr watch` keeps the PR list open, refreshes it every few minutes, and lets you press Enter to review right there. See [Watch](#watch).
@@ -250,8 +277,8 @@ Prefer a terminal? `reviewpr watch` keeps the PR list open, refreshes it every f
 | Which notifications will I get? | `reviewpr watch --install` sends a test notification and says which mode works: **clickable** (terminal-notifier, clicking opens the PR) or **plain** (osascript, ends with "run reviewpr"; clicking can't open the PR). Plain needs no setup. You get it when terminal-notifier isn't installed, or before macOS allows it. macOS can ask to allow terminal-notifier some time after its first notification attempt, not right away: click **Allow** (and choose **Alerts** to keep banners on screen), then run `reviewpr watch --install` again to confirm clickable mode. |
 | No notification ever appears | Install says `Notifications: not working`. Check Focus or Do Not Disturb (banners still land in Notification Center), and **System Settings → Notifications**. |
 | Banners vanish too fast | Set terminal-notifier's style to **Alerts** in **System Settings → Notifications**. |
-| Is the background check running? | `tail state/watch.log` shows one line per check (`acme/widget: 0 notifications`). `poll failed: …` usually means `gh` isn't signed in: run `gh auth status`. |
-| A setting in `config.json` didn't apply to the background check | Run `reviewpr watch --install` again. |
+| Is the background check running? | `tail state/watch.log` shows one line per repository per check (`acme/widget: 0 notifications`). `poll failed: …` usually means `gh` isn't signed in: run `gh auth status`. `poll failed: acme/api: …` alone means that one repository can't be read: check its name and your access. |
+| A setting in `config.json` didn't apply | See [Updating watch](#updating-watch): only `intervalMinutes` needs `reviewpr watch --install` again; an open `reviewpr watch` needs a restart. |
 
 ### A review run
 

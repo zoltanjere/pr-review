@@ -253,3 +253,88 @@ test('c in the app opens Settings and comes back to the list with the new settin
   await run.done;
   assert.deepEqual(run.reviewed, []);
 });
+
+// Two repositories, each with its own open list per poll.
+function twoRepos(lists, { failing = null } = {}) {
+  const polls = {};
+  return {
+    viewer: async () => 'me',
+    findClone: async () => {},
+    listOpenPrs: async (repo) => {
+      if (repo === failing) throw new Error('Could not resolve to a Repository');
+      const i = polls[repo] = (polls[repo] ?? -1) + 1;
+      return lists[repo][Math.min(i, lists[repo].length - 1)];
+    },
+    reviewCommit: async () => null,
+    commitsSince: async () => null,
+    prOutcome: async () => ({ state: 'MERGED', mergedBy: 'lee', title: 'PR', url: 'u' }),
+  };
+}
+
+test('several repositories: each is primed and notifies on its own, and the log has a line per repository', async (t) => {
+  const { paths } = await folder(t);
+  const adapters = twoRepos({ 'acme/widget': [[pr(61)], [pr(61), pr(62)]], 'acme/gadget': [[], [pr(61)]] });
+  const sent = [];
+  const notify = async (n) => { sent.push(`${n.repo} ${n.text}`); };
+  for (let i = 0; i < 2; i++) await runOnce(['acme/widget', 'acme/gadget'], adapters, { events: ['new'], paths, notify, now: NOW });
+  assert.deepEqual(sent.sort(), ['acme/gadget ● #61 new PR from alice', 'acme/widget ● #62 new PR from alice']);
+  const memory = JSON.parse(await readFile(paths.memory, 'utf8'));
+  assert.deepEqual(Object.keys(memory.primed).sort(), ['acme/gadget', 'acme/widget']);
+  assert.deepEqual(Object.keys(memory.open).sort(), ['acme/gadget#61', 'acme/widget#61', 'acme/widget#62']);
+  const log = await readFile(paths.log, 'utf8');
+  assert.match(log, /acme\/widget: 1 notification \| ● #62 new PR from alice/);
+  assert.match(log, /acme\/gadget: 1 notification \| ● #61 new PR from alice/);
+});
+
+test('several repositories: one unreadable keeps its memory and is logged; the others still notify', async (t) => {
+  const { paths } = await folder(t);
+  const lists = { 'acme/widget': [[pr(1)], [pr(1), pr(2)]], 'acme/gadget': [[pr(5)], []] };
+  await runOnce(['acme/widget', 'acme/gadget'], twoRepos(lists), { events: ['new'], paths, notify: async () => {}, now: NOW });
+  const sent = [];
+  await runOnce(['acme/widget', 'acme/gadget'], twoRepos(lists, { failing: 'acme/gadget' }), { events: ['new', 'merged'], paths, notify: async (n) => { sent.push(n.text); }, now: NOW });
+  assert.deepEqual(sent, []); // widget's list on a fresh adapter is its first one again: nothing new
+  const memory = JSON.parse(await readFile(paths.memory, 'utf8'));
+  assert(memory.open['acme/gadget#5'], 'gadget #5 is not taken for merged while gadget is unreadable');
+  assert.match(await readFile(paths.log, 'utf8'), /poll failed: acme\/gadget: Could not resolve to a Repository/);
+  // None readable: the poll fails as with one repository.
+  await assert.rejects(runOnce(['acme/gadget'], twoRepos(lists, { failing: 'acme/gadget' }), { events: ['new'], paths, notify: async () => {}, now: NOW }), /Could not resolve/);
+});
+
+test('watch reads "repositories" and says which it checks on install', async (t) => {
+  const { dir, paths } = await folder(t);
+  const configPath = join(dir, 'config.json');
+  await writeFile(configPath, JSON.stringify({ model: 'm', repositories: ['acme/widget', 'acme/gadget'] }));
+  let text = '';
+  await watchCommand(['--install'], { configPath, paths, agentDir: join(dir, 'LaunchAgents'), exec: async () => '', output: { write: (chunk) => { text += chunk; } }, node: '/n/node', path: '/usr/bin', notify: async () => 'terminal-notifier' });
+  assert.match(text, /checks acme\/widget, acme\/gadget every 5 min/);
+  assert.match(text, /again after changing intervalMinutes or Node/);
+  await writeFile(configPath, JSON.stringify({ model: 'm' }));
+  await assert.rejects(watchCommand(['--once'], { configPath, paths }), /Set "repositories"/);
+});
+
+test('the app over several repositories: one list with a repository column, marks by repository, labelled notices', async (t) => {
+  const { paths } = await folder(t);
+  const adapters = twoRepos({
+    'acme/widget': [[pr(61), pr(9)], [pr(61)]],
+    'acme/gadget': [[pr(9)], [pr(9), pr(61, { updatedAt: '2026-11-23T11:00:00Z' })]],
+  });
+  const term = appTerminal();
+  const ticks = [];
+  const timers = { setInterval: (fn, ms) => { ticks.push({ fn, ms }); return ticks.length; }, clearInterval: () => {} };
+  const reviewed = [];
+  const done = runApp(['acme/widget', 'acme/gadget'], adapters, {
+    events: ['new', 'merged'], intervalMinutes: 5, paths, timers, input: term.input, output: term.output, now: () => NOW,
+    notify: async () => {}, review: async (url) => { reviewed.push(url); },
+  });
+  await until(() => term.text().includes('2 repositories: 3 to review'));
+  assert.match(term.text(), /widget  #61/);
+  assert.match(term.text(), /gadget  #9 /);
+  ticks.find((timer) => timer.ms === 5 * 60_000).fn();
+  // gadget #61 is new and marked; widget #61 isn't; widget #9 merged shows labelled.
+  await until(() => term.text().includes('widget: ✔ #9 merged by lee'));
+  const last = term.text().split('2 repositories:').at(-1);
+  assert.match(last, /gadget  #61 .*•$/m);
+  assert.doesNotMatch(last, /widget  #61 .*•/);
+  term.press('q');
+  await done;
+});

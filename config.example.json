@@ -6,7 +6,7 @@
   },
   "notify": true,
   "azureDevOpsOrg": "https://dev.azure.com/your-organization",
-  "defaultRepository": "your-org/your-repo",
+  "repositories": ["your-org/your-repo"],
   "watch": {
     "events": [
       "new",

@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createAdapters, readConfig } from './adapters.mjs';
 import { isSkipped, loadJson, loadState, saveJson } from './picker-state.mjs';
-import { age, choosePr, OPEN_SETTINGS, scanRepo } from './select.mjs';
+import { age, choosePr, OPEN_SETTINGS, repoLabels, scanRepos } from './select.mjs';
 import { WATCH_EVENTS, departed, notify as showNotification, watchConfig, watchEvents } from './watch.mjs';
 
 // Running watch: one poll (shared by the launchd mode and the interactive
@@ -26,32 +26,40 @@ export const LOCK_STALE_MS = 15 * 60_000;
 const LOG_MAX = 256 * 1024;
 export const AGENT_LABEL = 'local.reviewpr.watch';
 
-// One poll: scan, look up PRs that left the open list (only with a merge event
-// on), decide the notifications, remember, then show them. The memory is saved
+// One poll over the repositories (one `owner/repo` or a list): scan them all,
+// look up PRs that left the open list (only with a merge event on), decide the
+// notifications per repository, remember, then show them. The memory is saved
 // before notifying, so a failed notification never repeats on the next poll.
-export async function pollOnce(repo, adapters, { events, paths = PATHS, notify = showNotification, now = Date.now(), seenAt = null, status = () => {} } = {}) {
-  const memory = loadJson(paths.memory, MEMORY_FIELDS);
+// A repository that can't be read is returned in `unreadable` and keeps its
+// memory; the others still notify. None readable: the error is thrown.
+export async function pollOnce(repos, adapters, { events, paths = PATHS, notify = showNotification, now = Date.now(), seenAt = null, status = () => {}, clone = false } = {}) {
+  let memory = loadJson(paths.memory, MEMORY_FIELDS);
   const skips = loadState(paths.picker).skipped;
-  const scan = await scanRepo(repo, adapters, { now, seenAt, status });
-  const outcomes = {};
-  if (events.includes('merged') || events.includes('merged-reviewed')) {
-    for (const number of departed(memory, repo, scan.all)) {
-      status(`checking what happened to #${number}`);
-      try { outcomes[number] = await adapters.prOutcome(repo, number); } catch { /* retried next poll */ }
+  const scan = await scanRepos([].concat(repos), adapters, { now, seenAt, status, clone });
+  const notifications = [];
+  for (const [repo, repoScan] of Object.entries(scan.byRepo)) {
+    const outcomes = {};
+    if (events.includes('merged') || events.includes('merged-reviewed')) {
+      for (const number of departed(memory, repo, repoScan.all)) {
+        status(`checking what happened to #${number}`);
+        try { outcomes[number] = await adapters.prOutcome(repo, number); } catch { /* retried next poll */ }
+      }
     }
+    const result = watchEvents({ repo, scan: repoScan, memory, events, outcomes, now, skipped: (pr) => isSkipped(repo, pr, skips) });
+    memory = result.memory;
+    notifications.push(...result.notifications);
   }
-  const result = watchEvents({ repo, scan, memory, events, outcomes, now, skipped: (pr) => isSkipped(repo, pr, skips) });
-  saveJson(paths.memory, MEMORY_FIELDS, result.memory);
+  saveJson(paths.memory, MEMORY_FIELDS, memory);
   const failed = [];
   const fallbacks = [];
-  for (const notification of result.notifications) {
+  for (const notification of notifications) {
     try {
       const used = await notify(notification);
       // Shown, but by the fallback: log why, so a blocked terminal-notifier is visible.
       if (typeof used === 'string' && used.includes('failed')) fallbacks.push(`${notification.text}: shown via ${used}`);
     } catch (error) { failed.push(`${notification.text}: ${error.message}`); }
   }
-  return { scan, notifications: result.notifications, failed, fallbacks };
+  return { scan, notifications, failed, fallbacks, unreadable: scan.failed };
 }
 
 // The lock an open interactive watch holds: { pid, beat }. Live while that
@@ -92,14 +100,19 @@ export function log(path, line, { now = Date.now() } = {}) {
 
 // `reviewpr watch --once`, what launchd runs: skip while an interactive watch
 // holds a live lock, otherwise poll once and log what was sent.
-export async function runOnce(repo, adapters, { events, paths = PATHS, notify, now = Date.now(), alive } = {}) {
+export async function runOnce(repos, adapters, { events, paths = PATHS, notify, now = Date.now(), alive } = {}) {
   if (lockState(paths.lock, { now, alive }) === 'live') {
     log(paths.log, 'skipped: an interactive watch is running', { now });
     return { skipped: true, notifications: [] };
   }
   try {
-    const result = await pollOnce(repo, adapters, { events, paths, notify, now });
-    log(paths.log, `${repo}: ${result.notifications.length} notification${result.notifications.length === 1 ? '' : 's'}${result.notifications.map((n) => ` | ${n.text}`).join('')}`, { now });
+    const result = await pollOnce(repos, adapters, { events, paths, notify, now });
+    // One line per repository that was read, as with one repository.
+    for (const repo of Object.keys(result.scan.byRepo)) {
+      const sent = result.notifications.filter((n) => n.repo === repo);
+      log(paths.log, `${repo}: ${sent.length} notification${sent.length === 1 ? '' : 's'}${sent.map((n) => ` | ${n.text}`).join('')}`, { now });
+    }
+    for (const { repo, error } of result.unreadable) log(paths.log, `poll failed: ${repo}: ${error.message}`, { now });
     for (const failure of result.failed) log(paths.log, `notification failed: ${failure}`, { now });
     for (const note of result.fallbacks ?? []) log(paths.log, `notification ${note}`, { now });
     return { skipped: false, notifications: result.notifications };
@@ -196,25 +209,26 @@ export async function watchCommand(args, options = {}) {
     return;
   }
   const config = await readConfig(options.configPath);
-  if (!config.defaultRepository) throw new Error('Set "defaultRepository": "owner/repo" in config.json for watch to know which repository to check.');
+  const repos = config.repositories;
+  if (!repos.length) throw new Error('Set "repositories": ["owner/repo"] in config.json for watch to know which repositories to check.');
   const { events, intervalMinutes } = watchConfig(config);
   const paths = options.paths ?? PATHS;
   if (mode === '--install') {
     const file = await installAgent({ intervalMinutes, dir: options.agentDir, paths, exec: options.exec, node: options.node, path: options.path });
-    output.write(`Background watch installed: checks ${config.defaultRepository} every ${intervalMinutes} min for ${events.length === WATCH_EVENTS.length ? 'all events' : events.join(', ')}.\n`
+    output.write(`Background watch installed: checks ${repos.join(', ')} every ${intervalMinutes} min for ${events.length === WATCH_EVENTS.length ? 'all events' : events.join(', ')}.\n`
       + `  Agent: ${file}\n  Log:   ${paths.log}\n`
-      + '  After changing "watch" in config.json, run reviewpr watch --install again. Remove it with reviewpr watch --uninstall.\n');
-    output.write(`  ${await notificationMode(config.defaultRepository, options.notify ?? showNotification)}\n`);
+      + '  Each check reads config.json and the code afresh. Run reviewpr watch --install again after changing intervalMinutes or Node. Remove it with reviewpr watch --uninstall.\n');
+    output.write(`  ${await notificationMode(repos[0], options.notify ?? showNotification)}\n`);
     return;
   }
   const adapters = options.adapters ?? createAdapters({ ...options, progress: () => {} });
   if (mode === '--once') {
-    await runOnce(config.defaultRepository, adapters, { events, paths, notify: options.notify });
+    await runOnce(repos, adapters, { events, paths, notify: options.notify });
     return;
   }
   const interactive = options.interactive ?? Boolean(process.stdin.isTTY && process.stderr.isTTY);
   if (!interactive) throw new Error('The interactive watch needs a terminal. In the background, use reviewpr watch --install.');
-  await runApp(config.defaultRepository, adapters, { events, intervalMinutes, paths, notify: options.notify, review: options.review, settings: options.settings, input: options.input, output: options.output });
+  await runApp(repos, adapters, { events, intervalMinutes, paths, notify: options.notify, review: options.review, settings: options.settings, input: options.input, output: options.output });
 }
 
 // Events that never become picker rows: they show on the status line only.
@@ -225,11 +239,13 @@ const FAILURES_BEFORE_NOTICE = 3;
 // during a review, then only as desktop notifications), refreshes the list in
 // place, and Enter runs a review in this terminal and comes back here. Holds
 // the lock so the launchd mode stays quiet meanwhile; q quits and frees it.
-export async function runApp(repo, adapters, {
+export async function runApp(repoOrRepos, adapters, {
   events, intervalMinutes, paths = PATHS, notify = showNotification, review, settings, input, output = process.stderr,
   now = () => Date.now(), pick = choosePr, alive, timers = { setInterval, clearInterval },
 } = {}) {
   if (lockState(paths.lock, { now: now(), alive }) === 'live') throw new Error('Another reviewpr watch is already running in a terminal.');
+  const repos = [].concat(repoOrRepos);
+  const labels = repoLabels(repos);
   writeLock(paths.lock, { now: now() });
   const beat = timers.setInterval(() => writeLock(paths.lock, { now: now() }), 60_000);
   const marks = new Set();
@@ -238,33 +254,40 @@ export async function runApp(repo, adapters, {
   let checkedAt = null;
   let failures = 0;
   let lastError = null;
+  // Checks in a row that couldn't read one repository while others worked.
+  const repoFailures = {};
+  const tellUnreachable = (repo, error) => notify({ repo, number: 0, title: error.message, url: `https://github.com/${repo}/pulls`, events: [], text: 'watch can\'t reach GitHub' }).catch(() => {});
   let seenAt = null;
   let polling = null;
   let lastScan = null;
   const poll = (status = () => {}) => {
     polling ??= (async () => {
       try {
-        const result = await pollOnce(repo, adapters, { events, paths, notify, now: now(), seenAt, status });
+        const result = await pollOnce(repos, adapters, { events, paths, notify, now: now(), seenAt, status, clone: true });
         checkedAt = now();
         lastScan = result.scan;
         failures = 0;
         lastError = null;
         for (const n of result.notifications) {
-          if (n.events.every((event) => NOTICE_ONLY.has(event))) notices.unshift({ text: n.text, at: checkedAt });
-          else marks.add(n.number);
+          if (n.events.every((event) => NOTICE_ONLY.has(event))) notices.unshift({ text: labels ? `${labels[n.repo]}: ${n.text}` : n.text, at: checkedAt });
+          else marks.add(`${n.repo}#${n.number}`);
+        }
+        for (const repo of repos) {
+          const failure = result.unreadable.find((item) => item.repo === repo);
+          repoFailures[repo] = failure ? (repoFailures[repo] ?? 0) + 1 : 0;
+          if (failure) log(paths.log, `poll failed: ${repo}: ${failure.error.message}`, { now: checkedAt });
+          if (failure && repoFailures[repo] === FAILURES_BEFORE_NOTICE) await tellUnreachable(repo, failure.error);
         }
         notices.splice(3);
         for (const failure of result.failed) log(paths.log, `notification failed: ${failure}`, { now: checkedAt });
         for (const note of result.fallbacks ?? []) log(paths.log, `notification ${note}`, { now: checkedAt });
-        listener?.(result.scan.list);
+        listener?.(result.scan);
         return result;
       } catch (error) {
         failures++;
         lastError = error;
         log(paths.log, `poll failed: ${error.message}`, { now: now() });
-        if (failures === FAILURES_BEFORE_NOTICE) {
-          await notify({ repo, number: 0, title: error.message, url: `https://github.com/${repo}/pulls`, events: [], text: 'watch can\'t reach GitHub' }).catch(() => {});
-        }
+        if (failures === FAILURES_BEFORE_NOTICE) await tellUnreachable(repos[0], error);
         listener?.(null);
         return null;
       } finally {
@@ -296,7 +319,7 @@ export async function runApp(repo, adapters, {
   try {
     for (;;) {
       let full = false;
-      const url = await pick(repo, adapters, { input, output, watch, statePath: paths.picker, settings: await settings?.line(), onPick: (choice) => { full = Boolean(choice?.full); } });
+      const url = await pick(repos, adapters, { input, output, watch, statePath: paths.picker, settings: await settings?.line(), onPick: (choice) => { full = Boolean(choice?.full); } });
       if (url === OPEN_SETTINGS) {
         await settings.open();
         continue;

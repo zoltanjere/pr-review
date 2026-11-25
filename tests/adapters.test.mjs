@@ -829,7 +829,7 @@ test('readConfig: provider defaults to copilot; claude takes its models from the
   t.after(() => rm(root, { recursive: true, force: true }));
   const path = join(root, 'config.json');
   const read = async (config) => { await writeFile(path, JSON.stringify(config)); return readConfig(path); };
-  assert.deepEqual(await read({ model: 'm' }), { model: 'm', provider: 'copilot' });
+  assert.deepEqual(await read({ model: 'm' }), { model: 'm', provider: 'copilot', repositories: [] });
   const claude = await read({ provider: 'claude', model: 'copilot-m', checkModel: 'copilot-c', claude: { model: CLAUDE_MODEL } });
   assert.equal(claude.provider, 'claude');
   assert.equal(claude.model, CLAUDE_MODEL);

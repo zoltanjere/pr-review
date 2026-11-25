@@ -345,14 +345,14 @@ export async function main(args, options = {}) {
     await prAction(url, { ...act, full: flags.includes('--full'), start: summary ? 'summary' : 'ask' });
     return;
   }
-  // No URL: pick one of the default repository's PRs that still need review.
-  if (!interactive) throw new Error('Pass a PR URL, or run in a terminal without --yes to pick one from defaultRepository.');
+  // No URL: pick one of the configured repositories' PRs that still need review.
+  if (!interactive) throw new Error('Pass a PR URL, or run in a terminal without --yes to pick one from your repositories.');
   const config = await readConfig(options.configPath);
-  if (!config.defaultRepository) throw new Error('Pass a PR URL, or set "defaultRepository": "owner/repo" in config.json to pick from its open PRs.');
+  if (!config.repositories.length) throw new Error('Pass a PR URL, or set "repositories": ["owner/repo"] in config.json to pick from their open PRs.');
   // "Back to the list" after a summary shows the picker again.
   for (;;) {
     let full = flags.includes('--full');
-    url = await (options.pick ?? choosePr)(config.defaultRepository, createAdapters({ ...options, progress: () => {} }), {
+    url = await (options.pick ?? choosePr)(config.repositories, createAdapters({ ...options, progress: () => {} }), {
       onPick: (choice) => { full = full || Boolean(choice?.full); },
       settings: await settings.line(),
     });

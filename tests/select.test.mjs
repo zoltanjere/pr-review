@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { candidatePrs, choosePr, formatRows, hiddenSummary, OPEN_SETTINGS, ownLabel, pickFromList, reviewedHead } from '../src/select.mjs';
+import { candidatePrs, choosePr, formatRows, hiddenSummary, OPEN_SETTINGS, ownLabel, pickFromList, repoLabels, reviewedHead } from '../src/select.mjs';
 
 const ME = 'me';
 const HEAD = 'a7e50c828a1b2de30d5bec350ee37e1d368490ad';
@@ -179,20 +179,35 @@ test('with a settings line, the picker shows it and c leaves the list to open Se
   assert.doesNotMatch(plain.text(), /settings/);
 });
 
-test('without a URL, main needs a terminal and defaultRepository, then reviews the picked PR', async (t) => {
+test('without a URL, main needs a terminal and repositories, then reviews the picked PR', async (t) => {
   const { main } = await import('../src/review.mjs');
   const dir = await mkdtemp(join(tmpdir(), 'pick-test-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const configPath = join(dir, 'config.json');
   await writeFile(configPath, JSON.stringify({ model: 'm' }));
   await assert.rejects(main([], { configPath, interactive: false }), /Pass a PR URL, or run in a terminal/);
-  await assert.rejects(main([], { configPath, interactive: true }), /set "defaultRepository"/);
+  await assert.rejects(main([], { configPath, interactive: true }), /set "repositories"/);
   await writeFile(configPath, JSON.stringify({ model: 'm', defaultRepository: 'https://github.com/acme/widget' }));
   let asked;
   await main([], { configPath, interactive: true, pick: async (repo) => { asked = repo; return null; } });
-  assert.equal(asked, 'acme/widget');
+  assert.deepEqual(asked, ['acme/widget']);
   await writeFile(configPath, JSON.stringify({ model: 'm', defaultRepository: 'not a repo' }));
   await assert.rejects(main([], { configPath, interactive: true }), /defaultRepository .* must look like owner\/repo/);
+});
+
+test('repositories: a list, deduplicated; defaultRepository is a list of one; not both', async (t) => {
+  const { readConfig } = await import('../src/adapters.mjs');
+  const dir = await mkdtemp(join(tmpdir(), 'repos-config-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, 'config.json');
+  const read = async (config) => { await writeFile(path, JSON.stringify({ model: 'm', ...config })); return readConfig(path); };
+  assert.deepEqual((await read({ repositories: ['acme/widget', 'https://github.com/acme/gadget.git', 'acme/widget'] })).repositories, ['acme/widget', 'acme/gadget']);
+  const old = await read({ defaultRepository: 'acme/widget' });
+  assert.deepEqual(old.repositories, ['acme/widget']);
+  assert.equal(old.defaultRepository, undefined);
+  await assert.rejects(read({ repositories: ['acme/widget'], defaultRepository: 'acme/widget' }), /not both/);
+  await assert.rejects(read({ repositories: 'acme/widget' }), /must be a list/);
+  await assert.rejects(read({ repositories: ['acme/widget', 'nope'] }), /repositories .* must look like owner\/repo \(got "nope"\)/);
 });
 
 const NOW = Date.parse('2026-11-23T12:00:00Z');
@@ -416,4 +431,65 @@ test('a rebase or base merge with the same changes is "No new changes since your
     assert.equal(scanned.prs[0].state.key, 'unchanged');
   }
   assert.deepEqual(calls, ['a7e50c8', 'e'.repeat(40)]);
+});
+
+test('repository labels: the name, owner/repo when names clash, at most 14 characters', () => {
+  assert.equal(repoLabels(['acme/widget']), null);
+  assert.deepEqual(repoLabels(['acme/widget', 'acme/gadget']), { 'acme/widget': 'widget', 'acme/gadget': 'gadget' });
+  assert.deepEqual(repoLabels(['acme/widget', 'other/widget', 'acme/api']), { 'acme/widget': 'acme/widget', 'other/widget': 'other/widget', 'acme/api': 'api' });
+  assert.deepEqual(repoLabels(['acme/a-very-long-repository-name', 'acme/x']), { 'acme/a-very-long-repository-name': 'a-very-long-r…', 'acme/x': 'x' });
+  // Still equal after the cut: the end of owner/repo tells them apart.
+  const labels = repoLabels(['acme/shared-platform-one', 'acme/shared-platform-two']);
+  assert.deepEqual(labels, { 'acme/shared-platform-one': '…-platform-one', 'acme/shared-platform-two': '…-platform-two' });
+  for (const label of Object.values(labels)) assert.ok(label.length <= 14);
+});
+
+test('several repositories: one list sorted across them, a repository column, the right URL', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'picker-state-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const statePath = join(dir, 'picker.json');
+  const lists = {
+    'acme/widget': [pr(61, { updatedAt: '2026-11-20T10:00:00Z' }), pr(43, { isDraft: true })],
+    'acme/gadget': [pr(61, { updatedAt: '2026-11-22T10:00:00Z', reviewRequests: [{ login: ME }] }), pr(7, { updatedAt: '2026-11-21T10:00:00Z' })],
+  };
+  const adapters = { findClone: async () => {}, viewer: async () => ME, listOpenPrs: async (repo) => lists[repo], reviewCommit: async () => null };
+  const now = Date.parse('2026-11-23T12:00:00Z');
+  const term = fakeTerminal();
+  term.output.rows = 20;
+  const url = choosePr(['acme/widget', 'acme/gadget'], adapters, { ...term, statePath, now });
+  term.press('return');
+  // Asked for you (gadget #61) sorts first, whichever repository it is in.
+  assert.equal(await url, 'https://github.com/acme/gadget/pull/61');
+  const text = term.text();
+  assert.match(text, /2 repositories: 3 to review \(4 open; hidden: 1 draft\)/);
+  assert.match(text, /★ gadget  #61/);
+  assert.match(text, /· gadget  #7 /);
+  assert.match(text, /· widget  #61/);
+  // Skipping gadget #61 leaves widget #61 listed.
+  const again = fakeTerminal();
+  const next = choosePr(['acme/widget', 'acme/gadget'], adapters, { ...again, statePath, now });
+  again.press('s', 'return');
+  assert.equal(await next, 'https://github.com/acme/gadget/pull/7');
+  const state = JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'));
+  assert.deepEqual(Object.keys(state.skipped), ['acme/gadget#61']);
+  assert.deepEqual(Object.keys(state.lastLooked).sort(), ['acme/gadget', 'acme/widget']);
+});
+
+test('several repositories: one that can\'t be read is named in the header, the others still list', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'picker-state-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const statePath = join(dir, 'picker.json');
+  const adapters = {
+    findClone: async (owner, repo) => { if (repo === 'api') throw new Error('No local repository matching acme/api found'); },
+    viewer: async () => ME, listOpenPrs: async () => [pr(5)], reviewCommit: async () => null,
+  };
+  const term = fakeTerminal();
+  const url = choosePr(['acme/widget', 'acme/api'], adapters, { ...term, statePath });
+  term.press('return');
+  assert.equal(await url, 'https://github.com/acme/widget/pull/5');
+  assert.match(term.text(), /2 repositories: 1 to review \(1 open\) · ⚠ api: couldn't read \(No local repository matching acme\/api found\)/);
+  const state = JSON.parse(await (await import('node:fs/promises')).readFile(statePath, 'utf8'));
+  assert.deepEqual(Object.keys(state.lastLooked), ['acme/widget']);
+  // None readable: the error stops the picker, as with one repository.
+  await assert.rejects(choosePr(['acme/api'], adapters, { ...fakeTerminal(), statePath }), /No local repository/);
 });

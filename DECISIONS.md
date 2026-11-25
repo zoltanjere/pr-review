@@ -352,7 +352,7 @@ Each entry has three parts:
   - The reviews may hold sensitive content.
 
 ### 7.3 PR picker: what is listed and why
-- **Decision:** Without a URL, the tool lists the open PRs of `defaultRepository` from one `gh pr list --json number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,createdAt,updatedAt,mergeable` call, and you pick one with the arrow keys (`src/select.mjs`).
+- **Decision:** Without a URL, the tool lists the open PRs of each configured repository (`repositories`, 7.8) from one `gh pr list --json number,title,author,isDraft,headRefOid,latestReviews,reviewRequests,createdAt,updatedAt,mergeable` call, and you pick one with the arrow keys (`src/select.mjs`).
   - **Listed:**
     - PRs with no review from you;
     - PRs whose latest review by you was dismissed on the commit it covered;
@@ -397,7 +397,7 @@ Each entry has three parts:
   - **Cost:** two calls per such row, cached per PR, reviewed commit and head for the life of the process.
 
 ### 7.4 Watch: notify when a PR needs you
-- **Decision:** `reviewpr watch` polls the default repository with the picker's own scan (`scanRepo`) and sends macOS notifications for the events listed in `config.json` (`watch.events`, see the README table; `all`, the default, means every event). It has two modes that share one poll (`pollOnce`):
+- **Decision:** `reviewpr watch` polls each configured repository with the picker's own scan (`scanRepos`, 7.8) and sends macOS notifications for the events listed in `config.json` (`watch.events`, see the README table; `all`, the default, means every event). It has two modes that share one poll (`pollOnce`):
   - `watch --once`, run by a launchd agent (`watch --install`) every `intervalMinutes` (default 5, minimum 2);
   - `watch`, the picker kept open: it refreshes in place, and Enter reviews in the same terminal and returns to the list (`reviewOne`).
   - **Events:** `watchEvents` is a pure function of the scan and the memory in `state/watch.json`.
@@ -461,6 +461,15 @@ Each entry has three parts:
   - **Not `node-notifier`:** a new dependency with native helpers for a small feature.
   - **Under 30 s,** you were probably watching. `notify` is read when the run ends, so turning it off applies at once.
 - **Don't:** If a banner is wanted later, send it through `osascript` only, never terminal-notifier: macOS files those under another app (Script Editor), whose style can stay a short banner (plans/run-notification.md).
+
+### 7.8 Several repositories in one list and one watch
+- **Decision:** `config.json` takes `"repositories": ["owner/repo", …]`. The older `defaultRepository` is read as a list of one, and setting both is an error. The picker and watch read every repository at the same time (`scanRepos`) and merge them into one list, sorted by state and age as before. With two or more repositories, each row has a repository column after the icon (`repoLabels`): the name, `owner/repo` when names clash, at most 14 characters. PRs are identified by `owner/repo#number` everywhere (skips, focus, watch marks). A repository that can't be read, including one with no local clone in the picker, is named in the header or logged, keeps its memory and "last looked" time, and doesn't stop the others. Only when none can be read does it fail as before.
+- **Why:**
+  - **Mixed, not grouped by repository:** the point of the list is what needs you most. Grouping would put urgent work in the second repository below everything in the first (user decision, 2026-11-25).
+  - **The capped label:** long repository names would otherwise push titles and labels past the 100-column rows. The name alone is enough when it's unique.
+  - **One repository looks as before,** so existing setups see no change.
+  - **One broken repository doesn't block the others:** a renamed repository or lost access is common and shouldn't hide the rest.
+- **Don't:** Add a per-repository filter key or label aliases until one busy repository actually drowns the others.
 
 ## 8. Evaluation
 

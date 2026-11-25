@@ -2,6 +2,13 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.14.0 (2026-11-25)
+
+- **Several repositories:** list them in `config.json` as `"repositories": ["acme/widget", "acme/gadget"]`. The picker shows all their PRs in one list, in the same groups and order, so the most urgent comes first whichever repository it's in, and a column names each PR's repository (its name, or `owner/repo` when two names clash, at most 14 characters). With one repository nothing looks different. `defaultRepository` still works as a list of one.
+- **Watch checks every listed repository:** each is primed and remembered on its own, notifications and log lines name their repository, and the open app's status line labels merges with it (`widget: ✔ #61 merged …`).
+- **One repository that can't be read doesn't stop the rest:** the picker names it in the header (`⚠ api: couldn't read (…)`) and lists the others; watch logs it and keeps notifying for the others. Only when none can be read does it fail as before.
+- **The README says when a running watch needs a restart:** the background check picks up new code and `config.json` by itself; `intervalMinutes` and a new Node version need `reviewpr watch --install` again, and an open `reviewpr watch` needs `q` and a restart. The install message says the same.
+
 ## 0.13.0 (2026-11-24)
 
 - **Choose where the models come from:** `reviewpr settings`, or `c` in the picker (also in `reviewpr watch`), sets the provider, **Copilot** or **Claude Code**, and its model. One choice sets both the main and the check model. The setting is saved in `config.json` (`provider`, and `claude.model`/`claude.checkModel` for Claude Code), and the picker and every run show it. Configs without `provider` run on Copilot exactly as before.

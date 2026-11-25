@@ -133,6 +133,11 @@ export function prState(pr, viewer, { mine = null, covered = null, newer = null,
 // `compareChanges(number, base, covered, head)` says whether the PR's own
 // changes are the same as when you reviewed (true, false or null); it is
 // called only after a rebase, or when every new commit is a merge.
+// By state priority, then, within a group, by the age shown in the row
+// (youngest first: 1h, 3h, 5h); unknown ages last.
+const shownAge = (pr) => (Number.isFinite(pr.state.ageMs) ? pr.state.ageMs : Infinity);
+const byPriority = (a, b) => a.state.rank - b.state.rank || shownAge(a) - shownAge(b);
+
 export async function candidatePrs(prs, viewer, { commitOf = async () => null, commitsSince = async () => null, compareChanges = async () => null, now = Date.now(), seenAt = null } = {}) {
   const hidden = { reviewed: 0, draft: 0, bot: 0 };
   const kept = [];
@@ -157,9 +162,7 @@ export async function candidatePrs(prs, viewer, { commitOf = async () => null, c
     const unchanged = same === true ? (rebased ? 'rebased' : 'merged') : null;
     kept.push({ ...pr, state: prState(pr, viewer, { mine, covered, newer, unchanged, now, seenAt }) });
   }
-  // Within a group, by the age shown in the row (youngest first: 1h, 3h, 5h); unknown ages last.
-  const shownAge = (pr) => (Number.isFinite(pr.state.ageMs) ? pr.state.ageMs : Infinity);
-  kept.sort((a, b) => a.state.rank - b.state.rank || shownAge(a) - shownAge(b));
+  kept.sort(byPriority);
   return { prs: kept, hidden, open: prs.length };
 }
 
@@ -178,22 +181,41 @@ export function hiddenSummary({ hidden, open }) {
 // the titles, not the terminal's right edge, and rows are at most MAX_WIDTH
 // wide. Skipped rows are dimmed whole.
 const MAX_WIDTH = 100;
-export function formatRows(prs, width = 100, { color = false } = {}) {
+// With several repositories, each row names its repository in a column after
+// the icon: the repository's name, owner/repo when two names are the same,
+// cut to REPO_LABEL_MAX characters so a long name can't push the titles right.
+// Labels still equal after the cut keep the end of owner/repo instead.
+// One repository: null, and the rows look as they always did.
+export const REPO_LABEL_MAX = 14;
+export function repoLabels(repos) {
+  if (repos.length < 2) return null;
+  const name = (repo) => repo.split('/')[1];
+  const clash = (repo) => repos.some((other) => other !== repo && name(other).toLowerCase() === name(repo).toLowerCase());
+  const labels = Object.fromEntries(repos.map((repo) => [repo, short(clash(repo) ? repo : name(repo), REPO_LABEL_MAX)]));
+  const taken = (label) => Object.values(labels).filter((other) => other === label).length > 1;
+  const tail = (repo) => (repo.length > REPO_LABEL_MAX ? `…${repo.slice(-(REPO_LABEL_MAX - 1))}` : repo);
+  return Object.fromEntries(repos.map((repo) => [repo, taken(labels[repo]) ? tail(repo) : labels[repo]]));
+}
+
+export function formatRows(prs, width = 100, { color = false, labels = null } = {}) {
   const c = palette(color);
+  const labelOf = (pr) => (labels ? labels[pr.repo] ?? '' : '');
+  const repoWidth = labels ? Math.max(0, ...prs.map((pr) => labelOf(pr).length)) : 0;
+  const repo = (pr, paint = (text) => text) => (repoWidth ? `${paint(labelOf(pr).padEnd(repoWidth))}  ` : '');
   const numberWidth = Math.max(0, ...prs.map((pr) => String(pr.number).length)) + 1;
   const authorWidth = Math.min(28, Math.max(0, ...prs.map((pr) => (pr.author?.login ?? '').length)));
   const author = (pr) => short(pr.author?.login ?? '', authorWidth).padEnd(authorWidth);
   const number = (pr) => `#${pr.number}`.padEnd(numberWidth);
   if (!prs.some((pr) => pr.state)) {
     return prs.map((pr) => {
-      const head = `${number(pr)}  ${author(pr)}  `;
+      const head = `${repo(pr)}${number(pr)}  ${author(pr)}  `;
       return head + short(pr.title ?? '', Math.max(10, width - head.length - 4));
     });
   }
   const ageOf = (pr) => (Number.isFinite(pr.state?.ageMs) ? age(pr.state.ageMs) : '');
   const ageWidth = Math.max(0, ...prs.map((pr) => ageOf(pr).length));
   const labelWidth = Math.max(0, ...prs.map((pr) => (pr.state?.label ?? '').length));
-  const headWidth = 2 + numberWidth + 2 + (ageWidth ? ageWidth + 2 : 0) + authorWidth + 2;
+  const headWidth = 2 + (repoWidth ? repoWidth + 2 : 0) + numberWidth + 2 + (ageWidth ? ageWidth + 2 : 0) + authorWidth + 2;
   const room = Math.min(width, MAX_WIDTH) - headWidth - (labelWidth ? labelWidth + 2 : 0);
   const titleWidth = Math.max(10, Math.min(room, Math.max(0, ...prs.map((pr) => (pr.title ?? '').length))));
   return prs.map((pr) => {
@@ -201,9 +223,9 @@ export function formatRows(prs, width = 100, { color = false } = {}) {
     const when = ageWidth ? `${ageOf(pr).padEnd(ageWidth)}  ` : '';
     const title = short(pr.title ?? '', titleWidth);
     const tail = state.label ? `${title.padEnd(titleWidth)}  ${state.label}` : title;
-    if (state.dim) return c.dim(`${state.icon} ${number(pr)}  ${when}${author(pr)}  ${tail}`);
+    if (state.dim) return c.dim(`${state.icon} ${repo(pr)}${number(pr)}  ${when}${author(pr)}  ${tail}`);
     const paint = (name, part) => (name ? c[name](part) : part);
-    return `${paint(state.color, state.icon)} ${number(pr)}  ${paint(ageColor(state.ageMs), when)}${author(pr)}  ${tail}`;
+    return `${paint(state.color, state.icon)} ${repo(pr, c.dim)}${number(pr)}  ${paint(ageColor(state.ageMs), when)}${author(pr)}  ${tail}`;
   });
 }
 
@@ -302,11 +324,11 @@ export function pickFromList(title, rows, { input = process.stdin, output = proc
 
 // Rows for the picker: a heading per state group, then that group's PRs.
 // Returns the rows and, per row, the PR it stands for (null for a heading).
-export function pickerRows(prs, width, { color = false, skipped = () => false, marked = () => false } = {}) {
+export function pickerRows(prs, width, { color = false, skipped = () => false, marked = () => false, labels = null } = {}) {
   const shown = prs.map((pr) => (skipped(pr)
     ? { ...pr, state: { ...pr.state, label: ['skipped', pr.state.label].filter(Boolean).join(' · '), dim: true } }
     : marked(pr) ? { ...pr, state: { ...pr.state, label: ['•', pr.state.label].filter(Boolean).join(' ') } } : pr));
-  const lines = formatRows(shown, width, { color });
+  const lines = formatRows(shown, width, { color, labels });
   const rows = [];
   const map = [];
   let group = null;
@@ -359,77 +381,122 @@ export async function scanRepo(repo, adapters, { now = Date.now(), seenAt = null
   return { viewer, all, list };
 }
 
+// The open PRs of several repositories, read at the same time, as one list:
+// each PR carries `repo`, the list is sorted as one (most urgent first,
+// whichever repository), and hidden counts are summed. `seenAt` is a time or
+// { [repo]: time }. With `clone`, a repository without a local clone counts as
+// unreadable, since its PRs couldn't be reviewed. A repository that can't be
+// read is reported in `failed` and the others still list; when none can be
+// read, the first error is thrown. Read-only.
+export async function scanRepos(repos, adapters, { now = Date.now(), seenAt = null, status = () => {}, clone = false } = {}) {
+  const labels = repoLabels(repos);
+  const results = await Promise.all(repos.map(async (repo) => {
+    const say = labels ? (text) => status(`${labels[repo]}: ${text}`) : status;
+    try {
+      if (clone) {
+        say('checking local clone');
+        const [owner, name] = repo.split('/');
+        await adapters.findClone(owner, name);
+      }
+      const seen = seenAt && typeof seenAt === 'object' ? seenAt[repo] : seenAt;
+      return { repo, scan: await scanRepo(repo, adapters, { now, seenAt: seen, status: say }) };
+    } catch (error) { return { repo, error }; }
+  }));
+  const read = results.filter((result) => result.scan);
+  const failed = results.filter((result) => result.error).map(({ repo, error }) => ({ repo, error }));
+  if (!read.length) throw failed[0].error;
+  const hidden = { reviewed: 0, draft: 0, bot: 0 };
+  for (const { scan } of read) for (const key of Object.keys(hidden)) hidden[key] += scan.list.hidden[key] ?? 0;
+  const prs = read.flatMap(({ repo, scan }) => scan.list.prs.map((pr) => ({ ...pr, repo }))).sort(byPriority);
+  return {
+    viewer: read[0].scan.viewer,
+    byRepo: Object.fromEntries(read.map(({ repo, scan }) => [repo, scan])),
+    list: { prs, hidden, open: read.reduce((sum, { scan }) => sum + scan.list.open, 0) },
+    failed,
+  };
+}
+
 // What choosePr returns when `c` was pressed: open Settings, then pick again.
 export const OPEN_SETTINGS = Symbol('settings');
 
-// Lists the default repository's PRs that need review and lets the person pick
-// one. The loading is a visible step ("Loading open PRs of owner/repo" with
-// what it is doing right now), so the terminal never sits silent. `s` skips
-// the highlighted PR until its head changes, `a` shows skipped PRs. Returns
-// the PR URL, or null when nothing was picked. `f` picks the row for a full
-// review instead of a follow-up: onPick({ full }) says which.
+// Lists the PRs that need review across the configured repositories (one
+// `repo` string or a list) and lets the person pick one. With several, the
+// PRs are mixed in one list and each row names its repository; a repository
+// that can't be read is named in the header and the others still list. The
+// loading is a visible step ("Loading open PRs of owner/repo" with what it is
+// doing right now), so the terminal never sits silent. `s` skips the
+// highlighted PR until its head changes, `a` shows skipped PRs. Returns the PR
+// URL, or null when nothing was picked. `f` picks the row for a full review
+// instead of a follow-up: onPick({ full }) says which.
 // With `watch` (the interactive watch app), the list stays open while empty,
 // refreshes in place, marks new PRs with • until the cursor reaches them, and
-// shows a status line: watch = { scanner(status, { now, seenAt }), subscribe(apply)
-// returning an unsubscribe, refresh(), status(), marks: Set of PR numbers }.
+// shows a status line: watch = { scanner(status, { now, seenAt }) returning a
+// scanRepos result, subscribe(apply) returning an unsubscribe, refresh(),
+// status(), marks: Set of "owner/repo#number" }.
 // `settings` (a line such as "Provider: Copilot · Model: …") is shown above
 // the keys, and `c` returns OPEN_SETTINGS.
-export async function choosePr(repo, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now(), watch = null, onPick, settings } = {}) {
+export async function choosePr(repoOrRepos, adapters, { input, output = process.stderr, live = isLive(), reporter = plainReporter(), statePath = DEFAULT_STATE, now = Date.now(), watch = null, onPick, settings } = {}) {
   let full = false;
-  const [owner, name] = repo.split('/');
-  // Read the last look before listing: New and Updated mean "since then".
+  const repos = [].concat(repoOrRepos);
+  const labels = repoLabels(repos);
+  const where = repos.length === 1 ? repos[0] : `${repos.length} repositories`;
+  // Read the last looks before listing: New and Updated mean "since then".
   const state = loadState(statePath);
-  const seenAt = Date.parse(state.lastLooked[repo] ?? '');
+  const seenAt = Object.fromEntries(repos.map((repo) => [repo, Date.parse(state.lastLooked[repo] ?? '')]).filter(([, time]) => Number.isFinite(time)));
   const save = () => {
     try { saveState(statePath, state); } catch { /* the picker's memory is a convenience; never fail the pick */ }
   };
-  let list;
+  let scan;
   await runSteps([{
-    title: `Loading open PRs of ${repo}`,
+    title: `Loading open PRs of ${where}`,
     run: async (ui) => {
-      ui.status('checking local clone');
-      await adapters.findClone(owner, name);
       const status = (text) => ui.status(text);
-      const looked = Number.isFinite(seenAt) ? seenAt : null;
-      ({ list } = await (watch ? watch.scanner(status, { now, seenAt: looked }) : scanRepo(repo, adapters, { now, seenAt: looked, status })));
-      return `${list.prs.length} to review`;
+      scan = await (watch ? watch.scanner(status, { now, seenAt }) : scanRepos(repos, adapters, { now, seenAt, status, clone: true }));
+      return `${scan.list.prs.length} to review`;
     },
   }], { live, reporter });
   const skips = state.skipped;
+  const read = repos.filter((repo) => !scan.failed?.some((failure) => failure.repo === repo));
   // Skips of PRs that are closed or have new commits have ended; drop them.
-  for (const key of Object.keys(skips)) {
-    if (key.startsWith(`${repo}#`) && !list.prs.some((pr) => skipKey(repo, pr) === key && isSkipped(repo, pr, skips))) delete skips[key];
+  for (const repo of read) {
+    for (const key of Object.keys(skips)) {
+      if (key.startsWith(`${repo}#`) && !scan.list.prs.some((pr) => skipKey(pr.repo, pr) === key && isSkipped(pr.repo, pr, skips))) delete skips[key];
+    }
   }
-  // This visit counts as looking, also when nothing is picked.
-  state.lastLooked[repo] = new Date(now).toISOString();
+  // This visit counts as looking, also when nothing is picked; a repository
+  // that couldn't be read keeps its last look for next time.
+  for (const repo of read) state.lastLooked[repo] = new Date(now).toISOString();
   save();
-  if (!list.prs.length && !watch) {
-    output.write(`Nothing to review in ${repo} (${hiddenSummary(list)}).\n`);
+  if (!scan.list.prs.length && !watch) {
+    output.write(`Nothing to review in ${repos.join(', ')} (${hiddenSummary(scan.list)}).${unreadable(scan, labels)}\n`);
     return null;
   }
-  const skipped = (pr) => isSkipped(repo, pr, skips);
+  const key = (pr) => `${pr.repo}#${pr.number}`;
+  const skipped = (pr) => isSkipped(pr.repo, pr, skips);
   const color = !process.env.NO_COLOR && output.isTTY !== false;
   const width = output.columns || 100;
-  let showSkipped = list.prs.every(skipped); // all skipped: show them rather than an empty list
+  let showSkipped = scan.list.prs.every(skipped); // all skipped: show them rather than an empty list
   let view;
   const build = (focus) => {
+    const { list } = scan;
     const visible = showSkipped ? list.prs : list.prs.filter((pr) => !skipped(pr));
     const count = list.prs.filter(skipped).length;
-    view = pickerRows(visible, width, { color, skipped, marked: (pr) => Boolean(watch?.marks.has(pr.number)) });
-    const looked = Number.isFinite(seenAt) ? ` · last looked ${age(Math.max(0, now - seenAt))} ago` : '';
+    view = pickerRows(visible, width, { color, skipped, labels, marked: (pr) => Boolean(watch?.marks.has(key(pr))) });
+    const oldest = Math.min(...Object.values(seenAt));
+    const looked = Number.isFinite(oldest) ? ` · last looked ${age(Math.max(0, now - oldest))} ago` : '';
     const yours = list.prs.filter((pr) => pr.state.key === 'mine' && !skipped(pr)).length;
-    const title = `${repo}: ${list.prs.length - count - yours} to review${yours ? `, ${yours} yours` : ''}${count ? `, ${count} skipped` : ''} (${hiddenSummary(list)})${looked}`;
-    const index = Math.max(0, view.map.findIndex((pr) => pr && pr.number === focus?.number));
+    const title = `${where}: ${list.prs.length - count - yours} to review${yours ? `, ${yours} yours` : ''}${count ? `, ${count} skipped` : ''} (${hiddenSummary(list)})${looked}${unreadable(scan, labels)}`;
+    const index = Math.max(0, view.map.findIndex((pr) => pr && focus && key(pr) === key(focus)));
     return { rows: view.rows, title, index };
   };
   const actions = {
     s: (index) => {
       const pr = view.map[index];
       if (!pr) return undefined;
-      if (skipped(pr)) delete skips[skipKey(repo, pr)];
-      else skips[skipKey(repo, pr)] = pr.headRefOid;
+      if (skipped(pr)) delete skips[skipKey(pr.repo, pr)];
+      else skips[skipKey(pr.repo, pr)] = pr.headRefOid;
       save();
-      if (!list.prs.some((item) => !skipped(item))) showSkipped = true;
+      if (!scan.list.prs.some((item) => !skipped(item))) showSkipped = true;
       const next = view.map.slice(index + 1).find(Boolean) ?? view.map.slice(0, index).reverse().find(Boolean);
       return build(showSkipped ? pr : next);
     },
@@ -446,12 +513,12 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
   const control = {};
   // A background refresh: keep the highlighted PR highlighted.
   const unsubscribe = watch?.subscribe((next) => {
-    if (next) list = next;
+    if (next) scan = next;
     control.update?.(build(view.map[control.index?.() ?? 0]));
   });
   const onMove = (index) => {
     const pr = view.map[index];
-    return pr && watch?.marks.delete(pr.number) ? build(pr) : undefined;
+    return pr && watch?.marks.delete(key(pr)) ? build(pr) : undefined;
   };
   const first = build(null);
   const picked = await pickFromList(first.title, first.rows, {
@@ -464,5 +531,11 @@ export async function choosePr(repo, adapters, { input, output = process.stderr,
     return null;
   }
   onPick?.({ full });
-  return `https://github.com/${repo}/pull/${view.map[picked].number}`;
+  return `https://github.com/${view.map[picked].repo}/pull/${view.map[picked].number}`;
+}
+
+// " · ⚠ api: couldn't read (reason)" for each repository that failed, the
+// reason cut short so the header stays one line.
+function unreadable(scan, labels) {
+  return (scan.failed ?? []).map(({ repo, error }) => ` · ⚠ ${labels?.[repo] ?? repo}: couldn't read (${short(error?.message ?? 'unknown error', 60)})`).join('');
 }

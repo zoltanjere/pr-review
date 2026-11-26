@@ -323,7 +323,7 @@ What next?
   Edit the digest first
 ```
 
-- **Posting** asks for the review type, with the one matching the verdict preselected: Request changes for 🔴, Comment only for ⚠️, Approve for ✅.
+- **Posting** asks for the review type, with the one matching the verdict preselected: Request changes for 🔴, Comment only for ⚠️, Approve for ✅. If GitHub refuses the post (an outage, say), you're asked again, so you can retry or keep it local without a new run. A review GitHub saved despite the error counts as posted, so it's never posted twice.
 - **Overriding:** if you pick a type that contradicts the verdict, the verdict line is rewritten to match.
 - **New commits or your own PR:** only Comment is offered.
 - **How it posts:** one `gh pr review` as you, with a footer naming the reviewed commit.
@@ -363,6 +363,7 @@ digest  ── verdict, a re-review notice for the author, still open, new, reso
   </details>
   ```
 - **Short by design:** resolved points are one line each (✅ fixed, 💬 answered), with no explanation. Only open points carry a reason. The full evidence for every point is in the saved `…-follow-up.md`.
+- **Partly fixed points are rated again:** what remains of a partial fix gets its own priority, never higher than before. A remainder rated Minor folds into a `<details>` list and doesn't count against the verdict.
 - **Verdict:** 🔴 when a Must fix is still open, disputed or new; ⚠️ when 4 or more Should fix are open or new; otherwise ✅, which says "none blocking" when points are still open ("2 still open, none blocking.").
 - **Cost:** two sessions plus a small verify, instead of two full reviewers plus verify.
 - **Chains:** the posted footer reads `Follow-up at def5678 of the review at abc1234`, so the next follow-up checks only what was still open.

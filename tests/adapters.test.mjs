@@ -573,6 +573,24 @@ test('a check session with the wrong number of verdicts is retried once with a n
   assert.match(prompts[1], /wrong number of verdicts/);
 });
 
+test('the follow-up check re-rates only what remains of a partly fixed finding, with verify\'s definitions', async (t) => {
+  const prompts = [];
+  const copilot = (args) => {
+    prompts.push(promptOf(args));
+    return jsonl([message(JSON.stringify([{ n: 1, status: 'Partly fixed', answer: '-', reply: '', evidence: 'a.js:3', remaining: 'r', priority: 'Minor' }]))]);
+  };
+  const { adapters } = await prepared(t, { copilot });
+  const statuses = await adapters.followUp({ findings: [{ severity: 'Should fix', title: 'Cap', location: 'a.js:3', text: 't' }], old: 'a'.repeat(40), head: 'b'.repeat(40), newDiff: 'new.diff', replies: 'replies.md', context: 'context.json' });
+  assert.equal(statuses[0].priority, 'Minor');
+  assert.match(prompts[0], /rate what remains in "priority"/);
+  assert.match(prompts[0], /never higher than the finding's severity/);
+  assert.match(prompts[0], /Do not lower or raise a finding's severity, except what remains of a Partly fixed one\./);
+  // The definitions are verify's, not a copy.
+  assert.match(prompts[0], /- Must fix: merging as-is causes wrong behaviour/);
+  assert.match(prompts[0], /- Minor: low impact, but a careful senior reviewer/);
+  assert.match(prompts[0], /"priority": "<for Partly fixed: Must fix \| Should fix \| Minor; otherwise ->"/);
+});
+
 test('the check prompt makes verify trace a claimed example and skip what the PR already states', async (t) => {
   const prompts = [];
   const copilot = (args) => {
@@ -583,6 +601,12 @@ test('the check prompt makes verify trace a claimed example and skip what the PR
   await adapters.verify({ 'code-review': 'review' });
   assert.match(prompts[0], /walk that exact input through every function/);
   assert.match(prompts[0], /If a step contradicts the example/);
+  // A check is a protection only by what the PR says it is for and who can get past it.
+  assert.match(prompts[0], /Whether a check is a protection is decided by what the PR, its docs or its code say the check is for, and who can get past it\./);
+  assert.match(prompts[0], /is a guard against mistakes: a way past it is Should fix at most, and Minor when it needs a deliberately crafted input or follows a recovery step the PR documents\./);
+  // The walk starts where that input enters the code, not at a same-named file or function.
+  assert.match(prompts[0], /Start the walk where that exact input enters the code: cite the line that loads or passes it/);
+  assert.match(prompts[0], /If you can't find that line, the input doesn't reach the code: reject the finding, or make it a Question\./);
   // Severity is not lowered by likelihood: the person decides whether a Should fix blocks.
   assert.doesNotMatch(prompts[0], /Rate by likelihood/);
   assert.match(prompts[0], /already stated in the PR/);
@@ -590,7 +614,7 @@ test('the check prompt makes verify trace a claimed example and skip what the PR
   assert.match(prompts[0], /Quote the PR's words/);
   assert.match(prompts[0], /never give a fix that undoes the stated behaviour/);
   assert.match(prompts[0], /A cost or scale concern with no failure shown/);
-  assert.match(prompts[0], /only stops the tool or skips an item with a message/);
+  assert.match(prompts[0], /refuses, stops the tool or skips an item with a message the person can act on/);
   assert.match(prompts[0], /A failure that needs an unusual trigger/);
   assert.match(prompts[0], /A missing check on a one-off manual step/);
   assert.match(prompts[0], /whether the PR body already states what a finding describes/);
@@ -691,6 +715,21 @@ test('posting runs exactly one gh pr review with the chosen type and the body as
   await assert.rejects(adapters.postReview(PR, 'merge', 'x'), /Unknown review type/);
 });
 
+test('a failed post that GitHub saved anyway counts as posted; one it did not save fails', async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'post-test-'));
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+  const post = (reviews) => createAdapters({ tempRoot, progress: () => {}, execute: async (command, args) => {
+    if (args[0] === 'pr' && args[1] === 'review') throw new Error('gh failed: GraphQL: Something went wrong');
+    if (args[1] === 'user') return 'bob\n';
+    if (args[1] === '--paginate') return JSON.stringify([reviews]);
+    return '';
+  } }).postReview(PR, 'approve', 'the review');
+  const now = new Date().toISOString();
+  await post([{ user: { login: 'bob' }, state: 'APPROVED', submitted_at: now }]);
+  await assert.rejects(post([{ user: { login: 'bob' }, state: 'COMMENTED', submitted_at: now }, { user: { login: 'eve' }, state: 'APPROVED', submitted_at: now }]), /Something went wrong/);
+  await assert.rejects(post([{ user: { login: 'bob' }, state: 'APPROVED', submitted_at: '2026-01-01T00:00:00Z' }]), /Something went wrong/);
+});
+
 test('file:line references in the digest become links into the PR diff', async (t) => {
   const copilot = () => jsonl([...skillLoaded('review-digest'), message('<details><summary>1 minor item</summary>\n\n- `example.txt:1`: say why.\n</details>')]);
   const { f, adapters } = await prepared(t, { copilot });
@@ -745,6 +784,46 @@ test('preparation records the draft state and the state of referenced PRs, and s
   assert.equal(context.isDraft, false);
   assert.deepEqual(context.references[0], { reference: 'acme/tools#163', title: 'Tool flags', state: 'closed', pullRequest: true, mergedAt: '2026-11-11T08:57:15Z' });
   assert.match(context.references[1].error, /not found/);
+});
+
+test('preparation records the CI checks in a short list, a running check as its status', async (t) => {
+  const { prepared: result } = await prepared(t, {
+    metadata: {
+      statusCheckRollup: [
+        { __typename: 'CheckRun', name: 'tests-windows', workflowName: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://example.com/1' },
+        { __typename: 'CheckRun', name: 'lint', workflowName: 'CI', status: 'IN_PROGRESS', conclusion: '' },
+        { __typename: 'StatusContext', context: 'deploy/preview', state: 'FAILURE', targetUrl: 'https://example.com/2' },
+      ],
+    },
+  });
+  const context = JSON.parse(await readFile(result.context, 'utf8'));
+  assert.deepEqual(context.checks, [
+    { name: 'tests-windows', result: 'SUCCESS' },
+    { name: 'lint', result: 'IN_PROGRESS' },
+    { name: 'deploy/preview', result: 'FAILURE' },
+  ]);
+  assert.equal(context.statusCheckRollup, undefined);
+});
+
+test('the check prompt reads CI results and keeps unchecked runtime claims and message wording in proportion', async (t) => {
+  const prompts = [];
+  const copilot = (args) => {
+    if (isCheck(args)) prompts.push(promptOf(args));
+    return verifyStep(args);
+  };
+  const { adapters } = await prepared(t, { copilot });
+  await adapters.verify({ 'code-review': 'review' });
+  assert.match(prompts[0], /CI results at review time are in `checks`/);
+  assert.match(prompts[0], /Reject a Question that a finished check already answers\. A check that is still running answers nothing\./);
+  assert.match(prompts[0], /A finding whose case depends on how a platform, shell or tool behaves when it runs is Confirmed only when the code, its docs or a test that runs on that platform settles it\./);
+  assert.match(prompts[0], /A skipped test settles nothing\./);
+  assert.match(prompts[0], /A finding that a document, or a message or instruction the code shows a person or agent, is unclear/);
+  assert.match(prompts[0], /If the text already covers the case and only its order or emphasis is in question, it is Minor at most\./);
+  assert.match(prompts[0], /A fix must not contradict itself: give one consistent fix\./);
+  // Doc and PR-description gaps and clear refusals are capped at Minor, not set to Should fix.
+  assert.match(prompts[0], /Missing or stale documentation, gaps in the PR description, a file that doesn't follow the repository's template, and a check that refuses, stops the tool or skips an item with a message the person can act on \(nothing lost, posted, approved or merged wrongly\) are Minor at most, unless following the text or the refusal leads someone to a wrong action the code doesn't stop\./);
+  assert.doesNotMatch(prompts[0], /and missing documentation or PR-description fields/);
+  assert.doesNotMatch(prompts[0], /So is a failure that only stops the tool/);
 });
 
 test('a bare #N that GitHub returns 404 for is dropped quietly; an explicit reference keeps its 404', async (t) => {

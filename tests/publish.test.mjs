@@ -53,7 +53,7 @@ test('the posted body is the digest plus a short footer naming the reviewed comm
 
 // Answers for the arrow-key menus: a 0-based index, 'default' for Enter on the
 // preselected row, or null for q/Esc. Each call is recorded.
-async function session(t, answers, { findings = minorOnly, status = open(), edit, digest = '**Verdict:** ✅ Ship.' } = {}) {
+async function session(t, answers, { findings = minorOnly, status = open(), edit, digest = '**Verdict:** ✅ Ship.', failures = 0 } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'publish-test-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const digestPath = join(dir, '1-digest.md');
@@ -66,7 +66,10 @@ async function session(t, answers, { findings = minorOnly, status = open(), edit
   const queue = [...answers];
   const adapters = {
     prStatus: async () => status,
-    postReview: async (pr, event, body) => { posts.push({ pr, event, body }); },
+    postReview: async (pr, event, body) => {
+      if (failures-- > 0) throw new Error('gh failed: GraphQL: Something went wrong');
+      posts.push({ pr, event, body });
+    },
   };
   const pick = async (title, rows, initial) => {
     menus.push({ title, rows, initial, before: text });
@@ -113,6 +116,16 @@ test('posting preselects the recommended review type and marks it', async (t) =>
     findings: [{ title: 'Gap', status: 'Confirmed', priority: 'Should fix' }], digest: '**Verdict:** ⚠️ Changes recommended. 1 should-fix.',
   });
   assert.equal(changes.menus[1].initial, 1);
+});
+
+test('a failed post says nothing was posted and asks again, so it can be retried', async (t) => {
+  const run = await session(t, [1, 'default', 1, 'default'], { failures: 1 });
+  assert.deepEqual(run.result, { posted: 'approve' });
+  assert.equal(run.posts.length, 1);
+  assert.match(run.output(), /Not posted: gh failed: GraphQL: Something went wrong/);
+  assert.equal(run.menus[2].title, 'What next?');
+  const gaveUp = await session(t, [1, 'default', 'default'], { failures: 1 });
+  assert.deepEqual([gaveUp.result, gaveUp.posts], [{ posted: null }, []]);
 });
 
 test('a non-recommended type can be chosen, and the verdict line follows the choice', async (t) => {

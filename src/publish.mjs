@@ -125,7 +125,13 @@ export async function publishInTerminal(result, { adapters, input = process.stdi
       await writeFile(result.digestPath, `${digest.trim()}\n`, { mode: 0o600 });
       output.write(`${c.yellow('!')} ${own ? 'Verdict line marked as a self-review' : 'Verdict line changed to match your choice'}: ${aligned.line}\n`);
     }
-    await runSteps([{ title: `Posting review as ${EVENTS[event]}`, run: () => adapters.postReview(result.pr, event, reviewBody(digest, result.head, result.followUp?.old)) }], { live, reporter });
+    // A failed post (GitHub down, say) asks again, so the run isn't lost.
+    try {
+      await runSteps([{ title: `Posting review as ${EVENTS[event]}`, run: () => adapters.postReview(result.pr, event, reviewBody(digest, result.head, result.followUp?.old)) }], { live, reporter });
+    } catch (error) {
+      output.write(`${c.red(`Not posted: ${error.message}`)}\n${c.dim('The digest is still saved. Post again, or keep it local.')}\n`);
+      continue;
+    }
     output.write(`${c.green('✔')} Posted to ${prName} as ${c.bold(EVENTS[event])}.\n`);
     return { posted: event };
   }

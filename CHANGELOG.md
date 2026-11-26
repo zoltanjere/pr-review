@@ -2,6 +2,17 @@
 
 This project follows [semantic versioning](https://semver.org/). A pipeline or terminal-output change bumps the minor version.
 
+## 0.17.0 (2026-11-25)
+
+- **Verify checks that the input reaches the code:** when a finding says a specific input breaks something, verify now starts its trace at the line that loads or passes that input (the path, config key or call), not at a file, function or key with the same name. Without that line the finding is rejected or made a Question. A run once confirmed a false Must fix because two files in different folders shared a name, and only the one that was fine went through the check.
+- **Follow-ups rate what remains of a partial fix:** a Partly fixed point gets a new priority for what's left, with the same definitions verify uses, never higher than before. A remainder rated Minor folds into "1 minor point left from the last review" and doesn't count against the verdict, so a few small leftovers no longer push a fixed PR past the 3 Should fix limit.
+- **A guardrail isn't a security check:** whether a check is a protection, so that a deliberate way past it is a Must fix, now follows what the PR, its docs or its code say the check is for. A way past a guardrail for cooperative users or agents, or past a check only its input's authors can fool, is Should fix at most, and Minor when it needs a crafted input or follows a recovery step the PR documents.
+- **Verify sees CI:** the PR context now lists each CI check with its result, so verify no longer asks whether CI is green when a finished check already says so.
+- **Unchecked runtime claims are Questions:** a finding that depends on how a platform, shell or tool behaves when it runs is Confirmed only when the code, its docs or a test on that platform settles it. A skipped test doesn't count.
+- **Wording of messages to agents:** the rule for unclear documents now covers messages and instructions the code shows a person or agent. When the text already covers the case and only the order is in question, it's Minor at most. A fix that contradicts itself is rewritten into one fix.
+- **Doc gaps and clear refusals are Minor:** missing or stale docs, gaps in the PR description, a file that doesn't follow the repository's template, and a check that refuses with a message the person can act on are now Minor at most, unless following them leads to a wrong action the code doesn't stop. They used to come out Should fix, and a few together could push an otherwise fine PR past the limit of 3.
+- **A failed post no longer ends the run:** when GitHub refuses the review ("GraphQL: Something went wrong" during an outage), you see "Not posted: …" and the first menu again, so you can post again or keep it local without a new run. If GitHub saved the review despite the error, it counts as posted and isn't sent twice.
+
 ## 0.16.0 (2026-11-25)
 
 - **Up to 3 Should fix items recommend Approve:** the verdict says "✅ Ship. 2 should-fix, none blocking." and Approve is preselected, so the author reads and fixes them after the approval. 4 or more still give ⚠️ Changes recommended and Comment only, since many together can add up. A Must fix still gives 🔴 and Request changes. Follow-ups count open and new Should fix items the same way.

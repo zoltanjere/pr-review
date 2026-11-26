@@ -144,6 +144,17 @@ export function checkStatuses(results, count) {
 // a disputed answer and a partial fix included.
 export const resolved = (status) => status.status === 'Fixed' || (status.status === 'Answered' && status.answer === 'accepted');
 
+// What remains of a partly fixed finding is rated again by the check; the
+// rating counts only when it is valid and not higher. Every other status, and
+// a Question, keeps the finding's severity.
+const RATED = ['Must fix', 'Should fix', 'Minor'];
+export function remainingSeverity(finding, status) {
+  const original = finding.severity;
+  if (status?.status !== 'Partly fixed' || !RATED.includes(original)) return original;
+  const rated = status.priority;
+  return RATED.includes(rated) && RATED.indexOf(rated) >= RATED.indexOf(original) ? rated : original;
+}
+
 // --- The follow-up digest ----------------------------------------------------
 
 const ICON = { 'Must fix': '🔴', 'Should fix': '🟡', Question: '❓' };
@@ -210,9 +221,12 @@ export function shortTitle(title, max = 80) {
 // - newFindings: verify's findings for the new commits
 // - facts: { old, head, commits, chained, merged, rebased }
 export function followUpDigest({ previous, statuses, newBody = '', newFindings = [], facts }) {
-  const items = previous.map((finding, i) => ({ finding, status: statuses[i] }));
-  const open = items.filter(({ status }) => !resolved(status))
-    .sort((a, b) => ORDER.indexOf(a.finding.severity) - ORDER.indexOf(b.finding.severity));
+  const items = previous.map((finding, i) => ({ finding, status: statuses[i], severity: remainingSeverity(finding, statuses[i]) }));
+  const open = items.filter(({ status }) => !resolved(status));
+  // A remainder re-rated Minor folds away like any Minor; the rest are numbered.
+  const listed = open.filter(({ severity }) => severity !== 'Minor')
+    .sort((a, b) => ORDER.indexOf(a.severity) - ORDER.indexOf(b.severity));
+  const minor = open.filter(({ severity }) => severity === 'Minor');
   const done = items.filter(({ status }) => resolved(status));
   const added = newFindings.filter((f) => f.status === 'Question' || (f.status === 'Confirmed' && f.priority !== 'Minor'));
   const counts = {
@@ -222,9 +236,10 @@ export function followUpDigest({ previous, statuses, newBody = '', newFindings =
     added: added.length,
   };
 
-  // The verdict, from code: open earlier findings keep their severity.
+  // The verdict, from code: open earlier findings keep their severity, or the
+  // re-rated one of what remains of a partial fix.
   const all = [
-    ...open.map(({ finding }) => (finding.severity === 'Question' ? { status: 'Question', priority: '-' } : { status: 'Confirmed', priority: finding.severity })),
+    ...open.map(({ severity }) => (severity === 'Question' ? { status: 'Question', priority: '-' } : { status: 'Confirmed', priority: severity })),
     ...newFindings,
   ];
   const level = verdictFor(all).level;
@@ -235,17 +250,22 @@ export function followUpDigest({ previous, statuses, newBody = '', newFindings =
     : `${[open.length && `${open.length} still open`, added.length && `${added.length} new`].filter(Boolean).join(', ')}${level === 'ship' ? ', none blocking' : ''}.`;
 
   const sections = [verdictLine(level, rest), reReviewNotice({ ...facts, total: previous.length, counts })];
-  if (open.length) {
-    sections.push(['### Still open from the last review', ...open.map(({ finding, status }, i) => {
+  if (listed.length) {
+    sections.push(['### Still open from the last review', ...listed.map(({ finding, status, severity }, i) => {
       const why = status.status === 'Answered'
         ? `Reply: ${quote(status.reply)} This doesn't settle it: ${status.evidence}`
         : status.status === 'Partly fixed' ? `Partly fixed: ${status.remaining || status.evidence}` : (status.remaining || finding.text);
-      const head = finding.severity === 'Question' ? `${i + 1}. ❓ ${finding.title}` : `${i + 1}. ${ICON[finding.severity]} **${finding.title}**`;
+      const head = severity === 'Question' ? `${i + 1}. ❓ ${finding.title}` : `${i + 1}. ${ICON[severity]} **${finding.title}**`;
       return [head, finding.location && `   ${finding.location}`, `   ${why}`].filter(Boolean).join('\n');
     })].join('\n'));
   }
-  const fresh = newSection(newBody, open.length + 1);
+  const fresh = newSection(newBody, listed.length + 1);
   if (fresh.visible) sections.push(`### ${facts.approved ? 'New since the approval' : 'New in the fixes'}\n${fresh.visible}`);
+  if (minor.length) {
+    sections.push([`<details><summary>${minor.length} minor point${minor.length === 1 ? '' : 's'} left from the last review</summary>`, '',
+      ...minor.map(({ finding, status }) => `- ${shortTitle(finding.title)}: ${status.remaining || status.evidence}`),
+      '</details>'].join('\n'));
+  }
   if (done.length) {
     const summary = [counts.fixed && `${counts.fixed} fixed`, counts.answered && `${counts.answered} answered`].filter(Boolean).join(', ');
     sections.push([`<details><summary>Resolved since the last review: ${summary}</summary>`, '',
@@ -284,6 +304,7 @@ export function formatFollowUp(findings, statuses) {
     return [
       `### ${i + 1}. ${finding.title} (${status.status}${status.status === 'Answered' ? `, ${status.answer}` : ''})`,
       `- Severity: ${finding.severity}`,
+      remainingSeverity(finding, status) !== finding.severity ? `- Remaining part rated: ${remainingSeverity(finding, status)}` : null,
       `- Location: ${finding.location || '-'}`,
       status.reply ? `- Reply: ${quote(status.reply)}` : null,
       `- Evidence: ${status.evidence}`,

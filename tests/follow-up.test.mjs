@@ -133,7 +133,7 @@ test('followUpLine counts commits and findings', () => {
   assert.equal(followUpLine({ head: 'abc1234', commits: 0, findings: 1 }), 'Follow-up of your review at `abc1234`: no new commits, 1 finding to check.');
 });
 
-const { checkStatuses, followUpDigest, reReviewNotice, resolved, shortTitle, withNotice } = await import('../src/follow-up.mjs');
+const { checkStatuses, followUpDigest, reReviewNotice, remainingSeverity, resolved, shortTitle, withNotice } = await import('../src/follow-up.mjs');
 const { verdictFromText } = await import('../src/verdict.mjs');
 
 const PREVIOUS = postedFindings(DIGEST + FOOTER).findings;
@@ -305,4 +305,35 @@ test('followUpDigest after an approval: only the new commits, no empty tally, it
   // More than 3 open should-fix items together recommend a comment.
   const four = [1, 2, 3, 4].map(() => ({ status: 'Confirmed', priority: 'Should fix' }));
   assert.match(followUpDigest({ previous: [], statuses: [], newBody: '', newFindings: four, facts }), /^\*\*Verdict:\*\* ⚠️ Changes recommended\. 4 new\./);
+});
+
+test('what remains of a partly fixed finding counts at its new, lower priority; Minor leftovers fold away', () => {
+  const should = (title) => ({ n: 1, severity: 'Should fix', title, location: '`a.js:1`', text: 't' });
+  const previous = ['Cap', 'Lock', 'Hook', 'Parser'].map(should);
+  const partly = (priority) => ({ status: 'Partly fixed', evidence: 'a.js:1', remaining: 'only the side file is capped', priority });
+  // Four Should fix left: over the limit.
+  const kept = followUpDigest({ previous, statuses: previous.map(() => partly('Should fix')), facts: FACTS });
+  assert.match(kept, /^\*\*Verdict:\*\* ⚠️ Changes recommended\. 4 still open\./);
+  // One remainder re-rated Minor: three left, so it ships, and the Minor one is in <details>, not numbered.
+  const digest = followUpDigest({ previous, statuses: [partly('Minor'), partly('Should fix'), partly('Should fix'), partly('Should fix')], facts: FACTS });
+  assert.match(digest, /^\*\*Verdict:\*\* ✅ Ship\. 4 still open, none blocking\./);
+  assert.doesNotMatch(digest, /\d\. 🟡 \*\*Cap\*\*/);
+  assert.match(digest, /1\. 🟡 \*\*Lock\*\*/);
+  assert.match(digest, /<details><summary>1 minor point left from the last review<\/summary>\n\n- Cap: only the side file is capped\n<\/details>/);
+  assert.equal(verdictFromText(digest).event, 'approve');
+});
+
+test('remainingSeverity: only a valid, not higher priority on a Partly fixed finding changes it', () => {
+  const must = { severity: 'Must fix' };
+  const should = { severity: 'Should fix' };
+  assert.equal(remainingSeverity(must, { status: 'Partly fixed', priority: 'Should fix' }), 'Should fix');
+  assert.equal(remainingSeverity(should, { status: 'Partly fixed', priority: 'Minor' }), 'Minor');
+  // Higher, invalid or missing: the original stays.
+  assert.equal(remainingSeverity(should, { status: 'Partly fixed', priority: 'Must fix' }), 'Should fix');
+  assert.equal(remainingSeverity(should, { status: 'Partly fixed', priority: 'Blocker' }), 'Should fix');
+  assert.equal(remainingSeverity(should, { status: 'Partly fixed' }), 'Should fix');
+  // Only Partly fixed: Still open and Answered keep their severity, and a Question stays a Question.
+  assert.equal(remainingSeverity(should, { status: 'Still open', priority: 'Minor' }), 'Should fix');
+  assert.equal(remainingSeverity(must, { status: 'Answered', answer: 'disputed', priority: 'Minor' }), 'Must fix');
+  assert.equal(remainingSeverity({ severity: 'Question' }, { status: 'Partly fixed', priority: 'Minor' }), 'Question');
 });
